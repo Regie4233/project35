@@ -23,19 +23,51 @@ public struct NoiseGenerationJob : IJobParallelFor
 
         float3 worldPos = ChunkWorldPosition + new float3(x, y, z);
         
-        // Sample 3D noise (using unity.mathematics noise.cnoise)
-        float noiseValue = noise.cnoise(worldPos * NoiseScale);
+        // 2D Heightmap Noise (Base terrain shape)
+        float2 pos2D = new float2(worldPos.x, worldPos.z) * NoiseScale * 0.5f;
+        float heightNoise = noise.cnoise(pos2D);
+        // Normalize roughly to 0..1 and scale up by chunk height max (e.g. 16 or 32)
+        // Adjust baseline so it looks okay.
+        float baseHeight = ChunkSize.y * 0.5f + (heightNoise * ChunkSize.y * 0.4f);
+
+        // 3D Noise (Caves, overhangs, detail)
+        float detailNoise = noise.cnoise(worldPos * NoiseScale * 2f);
+
+        // Calculate raw density
+        // Higher y = lower density (above ground)
+        // Lower y = higher density (underground)
+        // detailNoise modifies the density threshold
+        float densityFloat = (baseHeight - worldPos.y) + (detailNoise * 5f);
+
+        // Normalize density to roughly -1 to 1 for byte mapping
+        float normalizedDensity = math.clamp(densityFloat / 10f, -1f, 1f);
+
+        // Convert the noise float to a 0-255 density byte.
+        // We will consider 128 as the surface iso-level.
+        byte density = (byte)math.clamp((normalizedDensity + 1f) * 127.5f, 0, 255);
         
-        // Convert the noise float to a 0-255 density byte
-        byte density = (byte)math.clamp((noiseValue + 1f) * 127.5f, 0, 255);
+        // If density is higher than our threshold (isoLevel scaled to 0-255), it's solid terrain
+        bool isSolid = density > (IsoLevel * 255);
         
-        // If density is higher than our threshold, it's solid terrain
-        ushort materialId = density > (IsoLevel * 255)? (ushort)1 : (ushort)0;
+        // Simple multiple materials
+        // e.g. Deep underground = stone (2), near surface = dirt/grass (1), air = (0)
+        ushort materialId = 0;
+        if (isSolid)
+        {
+            if (worldPos.y < baseHeight - 3)
+            {
+                materialId = 2; // Stone
+            }
+            else
+            {
+                materialId = 1; // Dirt/Grass
+            }
+        }
         
         // Pack data into the unsigned integer
         uint packedData = density;
         packedData |= (uint)(materialId << 8);
-        if (materialId > 0) 
+        if (isSolid)
         {
             packedData |= (1u << 24); // Flag bit 24 as Solid
         }

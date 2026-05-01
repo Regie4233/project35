@@ -6,6 +6,7 @@ using UnityEngine;
 public struct VoxelWorldSettings : IComponentData
 {
     public int3 ChunkSize;
+    public int3 GridSize;
     public float NoiseScale;
     public float IsoLevel;
 }
@@ -21,6 +22,7 @@ public class VoxelWorldAuthoring : MonoBehaviour
 {
    
     public Vector3Int ChunkSize = new Vector3Int(16, 16, 16);
+    public Vector3Int GridSize = new Vector3Int(3, 1, 3);
     public float NoiseScale = 0.05f;
     public float IsoLevel = 0.5f;
     
@@ -39,6 +41,7 @@ public class VoxelWorldAuthoring : MonoBehaviour
             AddComponent(entity, new VoxelWorldSettings
             {
                 ChunkSize = new int3(authoring.ChunkSize.x, authoring.ChunkSize.y, authoring.ChunkSize.z),
+                GridSize = new int3(authoring.GridSize.x, authoring.GridSize.y, authoring.GridSize.z),
                 NoiseScale = authoring.NoiseScale,
                 IsoLevel = authoring.IsoLevel
             });
