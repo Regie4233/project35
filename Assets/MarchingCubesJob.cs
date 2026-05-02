@@ -37,18 +37,21 @@ public struct MarchingCubesJob : IJob
         NativeArray<float> cubeValues = new NativeArray<float>(8, Allocator.Temp);
         NativeArray<float3> edgeVertices = new NativeArray<float3>(12, Allocator.Temp);
 
-        for (int z = 0; z < ChunkSize.z - 1; z++)
+        int3 pSize = ChunkSize + 1;
+
+        // Loop up to ChunkSize (instead of ChunkSize - 1) because we have ChunkSize + 1 data
+        for (int z = 0; z < ChunkSize.z; z++)
         {
-            for (int y = 0; y < ChunkSize.y - 1; y++)
+            for (int y = 0; y < ChunkSize.y; y++)
             {
-                for (int x = 0; x < ChunkSize.x - 1; x++)
+                for (int x = 0; x < ChunkSize.x; x++)
                 {
                     int cubeIndex = 0;
                     
                     for (int i = 0; i < 8; i++)
                     {
                         int3 p = new int3(x, y, z) + (int3)cornerOffsets[i];
-                        int flatIndex = p.x + (p.y * ChunkSize.x) + (p.z * ChunkSize.x * ChunkSize.y);
+                        int flatIndex = p.x + (p.y * pSize.x) + (p.z * pSize.x * pSize.y);
 
                         // Treat density as continuous value.
                         cubeValues[i] = VoxelData[flatIndex].GetDensity();
@@ -76,16 +79,18 @@ public struct MarchingCubesJob : IJob
 
                     for (int i = 0; TriTable[cubeIndex * 16 + i] != -1; i += 3)
                     {
-                        float3 v0 = new float3(x,y,z) + edgeVertices[TriTable[cubeIndex * 16 + i]];
-                        float3 v1 = new float3(x,y,z) + edgeVertices[TriTable[cubeIndex * 16 + i + 1]];
-                        float3 v2 = new float3(x,y,z) + edgeVertices[TriTable[cubeIndex * 16 + i + 2]];
+                        float3 v0_local = edgeVertices[TriTable[cubeIndex * 16 + i]];
+                        float3 v1_local = edgeVertices[TriTable[cubeIndex * 16 + i + 1]];
+                        float3 v2_local = edgeVertices[TriTable[cubeIndex * 16 + i + 2]];
 
-                        // Calculate normal for this triangle
-                        float3 normal = math.normalize(math.cross(v1 - v0, v2 - v0));
+                        float3 v0 = new float3(x, y, z) + v0_local;
+                        float3 v1 = new float3(x, y, z) + v1_local;
+                        float3 v2 = new float3(x, y, z) + v2_local;
 
-                        AddVertex(v0, normal);
-                        AddVertex(v1, normal);
-                        AddVertex(v2, normal);
+                        // Use gradient normals for smooth lighting
+                        AddVertex(v0, GetGradientNormal(v0));
+                        AddVertex(v1, GetGradientNormal(v1));
+                        AddVertex(v2, GetGradientNormal(v2));
                     }
                 }
             }
@@ -93,6 +98,50 @@ public struct MarchingCubesJob : IJob
         cubeValues.Dispose();
         edgeVertices.Dispose();
         cornerOffsets.Dispose();
+    }
+
+    private float3 GetGradientNormal(float3 pos)
+    {
+        int3 pSize = ChunkSize + 1;
+        
+        // Sample surrounding densities
+        float dx = GetDensityInterpolated(pos + new float3(1, 0, 0)) - GetDensityInterpolated(pos - new float3(1, 0, 0));
+        float dy = GetDensityInterpolated(pos + new float3(0, 1, 0)) - GetDensityInterpolated(pos - new float3(0, 1, 0));
+        float dz = GetDensityInterpolated(pos + new float3(0, 0, 1)) - GetDensityInterpolated(pos - new float3(0, 0, 1));
+
+        return math.normalize(new float3(dx, dy, dz));
+    }
+
+    private float GetDensityInterpolated(float3 pos)
+    {
+        int3 pSize = ChunkSize + 1;
+        int3 p0 = (int3)math.floor(pos);
+        int3 p1 = p0 + 1;
+
+        // Clamp to avoid out of bounds sampling
+        p0 = math.clamp(p0, 0, pSize - 1);
+        p1 = math.clamp(p1, 0, pSize - 1);
+
+        float3 f = pos - math.floor(pos);
+
+        float d000 = VoxelData[p0.x + (p0.y * pSize.x) + (p0.z * pSize.x * pSize.y)].GetDensity();
+        float d100 = VoxelData[p1.x + (p0.y * pSize.x) + (p0.z * pSize.x * pSize.y)].GetDensity();
+        float d010 = VoxelData[p0.x + (p1.y * pSize.x) + (p0.z * pSize.x * pSize.y)].GetDensity();
+        float d110 = VoxelData[p1.x + (p1.y * pSize.x) + (p0.z * pSize.x * pSize.y)].GetDensity();
+        float d001 = VoxelData[p0.x + (p0.y * pSize.x) + (p1.z * pSize.x * pSize.y)].GetDensity();
+        float d101 = VoxelData[p1.x + (p0.y * pSize.x) + (p1.z * pSize.x * pSize.y)].GetDensity();
+        float d011 = VoxelData[p0.x + (p1.y * pSize.x) + (p1.z * pSize.x * pSize.y)].GetDensity();
+        float d111 = VoxelData[p1.x + (p1.y * pSize.x) + (p1.z * pSize.x * pSize.y)].GetDensity();
+
+        float d00 = math.lerp(d000, d100, f.x);
+        float d10 = math.lerp(d010, d110, f.x);
+        float d01 = math.lerp(d001, d101, f.x);
+        float d11 = math.lerp(d011, d111, f.x);
+
+        float d0 = math.lerp(d00, d10, f.y);
+        float d1 = math.lerp(d01, d11, f.y);
+
+        return math.lerp(d0, d1, f.z);
     }
 
     private float3 VertexInterp(float isoLevel, float3 p1, float3 p2, float valp1, float valp2)

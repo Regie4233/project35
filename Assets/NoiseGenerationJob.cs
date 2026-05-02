@@ -16,10 +16,13 @@ public struct NoiseGenerationJob : IJobParallelFor
 
     public void Execute(int index)
     {
+        // Use padded dimensions for indexing
+        int3 pSize = ChunkSize + 1;
+        
         // Unflatten the 1D index back into 3D local coordinates
-        int x = index % ChunkSize.x;
-        int y = (index / ChunkSize.x) % ChunkSize.y;
-        int z = index / (ChunkSize.x * ChunkSize.y);
+        int x = index % pSize.x;
+        int y = (index / pSize.x) % pSize.y;
+        int z = index / (pSize.x * pSize.y);
 
         float3 worldPos = ChunkWorldPosition + new float3(x, y, z);
         
