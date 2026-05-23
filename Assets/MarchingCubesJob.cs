@@ -16,6 +16,7 @@ public struct MarchingCubesJob : IJob
     public NativeList<ushort> Indices;
     public NativeList<float3> Normals;
     public NativeList<float2> UVs;
+    public NativeList<float4> Colors;
 
     [ReadOnly] public NativeArray<int> EdgeTable;
     [ReadOnly] public NativeArray<int> TriTable;
@@ -154,6 +155,14 @@ public struct MarchingCubesJob : IJob
         return p1 + mu * (p2 - p1);
     }
 
+    private ushort GetMaterialAt(int3 p)
+    {
+        int3 pSize = ChunkSize + 1;
+        p = math.clamp(p, 0, pSize - 1);
+        int flatIndex = p.x + (p.y * pSize.x) + (p.z * pSize.x * pSize.y);
+        return VoxelData[flatIndex].GetMaterialID();
+    }
+
     private void AddVertex(float3 pos, float3 normal)
     {
         Indices.Add((ushort)Vertices.Length);
@@ -161,5 +170,25 @@ public struct MarchingCubesJob : IJob
         Normals.Add(normal);
         // Simple UV projection
         UVs.Add(new float2(pos.x, pos.z));
+
+        // Determine vertex color based on nearest voxel material ID
+        int3 voxelPos = (int3)math.round(pos);
+        ushort matId = GetMaterialAt(voxelPos);
+
+        float4 color = new float4(1.0f, 1.0f, 1.0f, 1.0f);
+        if (matId == 1)
+        {
+            color = new float4(0.27f, 0.62f, 0.18f, 1.0f); // Dirt/Grass: Green
+        }
+        else if (matId == 2)
+        {
+            color = new float4(0.5f, 0.5f, 0.5f, 1.0f); // Stone: Grey
+        }
+        else if (matId == 3)
+        {
+            color = new float4(0.9f, 0.1f, 0.1f, 1.0f); // Painted: Red
+        }
+
+        Colors.Add(color);
     }
 }

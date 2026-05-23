@@ -5,6 +5,7 @@ using Unity.Mathematics;
 using UnityEngine;
 using Unity.Transforms;
 
+[DisableAutoCreation]
 public partial struct VoxelModificationSystem : ISystem
 {
     [BurstCompile]
@@ -15,6 +16,8 @@ public partial struct VoxelModificationSystem : ISystem
 
     public void OnUpdate(ref SystemState state)
     {
+        /*
+        // This system is disabled in favor of VoxelColorSystem.
         // Use the modern Input System API
         if (UnityEngine.InputSystem.Mouse.current == null || !UnityEngine.InputSystem.Mouse.current.leftButton.wasPressedThisFrame) return;
 
@@ -96,5 +99,6 @@ public partial struct VoxelModificationSystem : ISystem
                 }
             }
         }
+        */
     }
 }

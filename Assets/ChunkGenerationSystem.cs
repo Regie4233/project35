@@ -16,6 +16,7 @@ public partial class ChunkGenerationSystem : SystemBase
 
     private NativeArray<int> edgeTable;
     private NativeArray<int> triTable;
+    private UnityEngine.Material fallbackMaterial;
 
     protected override void OnCreate()
     {
@@ -32,6 +33,11 @@ public partial class ChunkGenerationSystem : SystemBase
     {
         if (edgeTable.IsCreated) edgeTable.Dispose();
         if (triTable.IsCreated) triTable.Dispose();
+
+        if (fallbackMaterial != null)
+        {
+            UnityEngine.Object.DestroyImmediate(fallbackMaterial);
+        }
     }
 
     protected override void OnUpdate()
@@ -59,6 +65,14 @@ public partial class ChunkGenerationSystem : SystemBase
                             for (int z = 0; z < authoringSettings.GridSize.z; z++)
                             {
                                 var chunkEntity = ecb.Instantiate(authoringEntity);
+                                
+                                // Generate a random offset for this world generation
+                                if (x == 0 && y == 0 && z == 0 && authoringSettings.NoiseOffset.Equals(float2.zero))
+                                {
+                                    authoringSettings.NoiseOffset = new float2(UnityEngine.Random.Range(-10000f, 10000f), UnityEngine.Random.Range(-10000f, 10000f));
+                                }
+                                
+                                ecb.SetComponent(chunkEntity, authoringSettings);
                                 ecb.AddComponent(chunkEntity, new ChunkCoordinate { Value = new int3(x, y, z) });
                                 ecb.AddComponent<ChunkNeedsNoiseTag>(chunkEntity);
                                 // Apply translation so chunks don't overlap
@@ -68,6 +82,7 @@ public partial class ChunkGenerationSystem : SystemBase
                                     Rotation = quaternion.identity,
                                     Scale = 1f
                                 });
+                                ecb.AddComponent<Unity.Transforms.LocalToWorld>(chunkEntity);
 
                                 var buffer = ecb.AddBuffer<VoxelDataElement>(chunkEntity);
                             int3 pSize = authoringSettings.ChunkSize + 1;
@@ -103,6 +118,7 @@ public partial class ChunkGenerationSystem : SystemBase
                     ChunkWorldPosition = new float3(coord.x * chunkSettings.ChunkSize.x, coord.y * chunkSettings.ChunkSize.y, coord.z * chunkSettings.ChunkSize.z),
                     NoiseScale = chunkSettings.NoiseScale,
                     IsoLevel = chunkSettings.IsoLevel,
+                    NoiseOffset = chunkSettings.NoiseOffset,
                     VoxelData = voxelArray
                 };
 
@@ -124,6 +140,7 @@ public partial class ChunkGenerationSystem : SystemBase
                 using var indices = new NativeList<ushort>(Allocator.TempJob);
                 using var normals = new NativeList<float3>(Allocator.TempJob);
                 using var uvs = new NativeList<float2>(Allocator.TempJob);
+                using var colors = new NativeList<float4>(Allocator.TempJob);
 
                 for (int i = 0; i < entities.Length; i++)
                 {
@@ -136,6 +153,7 @@ public partial class ChunkGenerationSystem : SystemBase
                     indices.Clear();
                     normals.Clear();
                     uvs.Clear();
+                    colors.Clear();
 
                     var meshingJob = new MarchingCubesJob
                     {
@@ -146,6 +164,7 @@ public partial class ChunkGenerationSystem : SystemBase
                         Indices = indices,
                         Normals = normals,
                         UVs = uvs,
+                        Colors = colors,
                         EdgeTable = edgeTable,
                         TriTable = triTable
                     };
@@ -159,9 +178,25 @@ public partial class ChunkGenerationSystem : SystemBase
                         mesh.SetIndices(indices.AsArray(), MeshTopology.Triangles, 0);
                         mesh.SetNormals(normals.AsArray());
                         mesh.SetUVs(0, uvs.AsArray());
+                        mesh.SetColors(colors.AsArray());
+                        mesh.RecalculateBounds();
 
                         var materialComp = EntityManager.GetComponentObject<VoxelMaterialComponent>(entity);
-                        ChunkRendererSetup.InitializeChunkRendering(EntityManager, entity, mesh, materialComp.Material);
+                        UnityEngine.Material mat = materialComp.Material;
+                        if (mat == null)
+                        {
+                            if (fallbackMaterial == null)
+                            {
+                                Shader shader = Shader.Find("Custom/VoxelVertexColor");
+                                if (shader == null) shader = Shader.Find("Universal Render Pipeline/Lit");
+                                if (shader != null)
+                                {
+                                    fallbackMaterial = new UnityEngine.Material(shader);
+                                }
+                            }
+                            mat = fallbackMaterial;
+                        }
+                        ChunkRendererSetup.InitializeChunkRendering(EntityManager, entity, mesh, mat);
 
                         // Simple physics
                         var triangleIndices = new NativeArray<int3>(indices.Length / 3, Allocator.Temp);

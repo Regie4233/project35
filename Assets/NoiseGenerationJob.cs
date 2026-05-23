@@ -10,6 +10,7 @@ public struct NoiseGenerationJob : IJobParallelFor
     public float3 ChunkWorldPosition;
     public float NoiseScale;
     public float IsoLevel;
+    public float2 NoiseOffset;
 
     
     public NativeArray<VoxelDataElement> VoxelData;
@@ -27,14 +28,15 @@ public struct NoiseGenerationJob : IJobParallelFor
         float3 worldPos = ChunkWorldPosition + new float3(x, y, z);
         
         // 2D Heightmap Noise (Base terrain shape)
-        float2 pos2D = new float2(worldPos.x, worldPos.z) * NoiseScale * 0.5f;
+        float2 pos2D = (new float2(worldPos.x, worldPos.z) + NoiseOffset) * NoiseScale * 0.5f;
         float heightNoise = noise.cnoise(pos2D);
         // Normalize roughly to 0..1 and scale up by chunk height max (e.g. 16 or 32)
         // Adjust baseline so it looks okay.
         float baseHeight = ChunkSize.y * 0.5f + (heightNoise * ChunkSize.y * 0.4f);
 
         // 3D Noise (Caves, overhangs, detail)
-        float detailNoise = noise.cnoise(worldPos * NoiseScale * 2f);
+        float3 pos3D = worldPos + new float3(NoiseOffset.x, 0, NoiseOffset.y);
+        float detailNoise = noise.cnoise(pos3D * NoiseScale * 2f);
 
         // Calculate raw density
         // Higher y = lower density (above ground)

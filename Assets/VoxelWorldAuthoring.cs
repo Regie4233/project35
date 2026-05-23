@@ -9,6 +9,7 @@ public struct VoxelWorldSettings : IComponentData
     public int3 GridSize;
     public float NoiseScale;
     public float IsoLevel;
+    public float2 NoiseOffset;
 }
 
 // 2. A managed component to safely hold the Unity Material reference

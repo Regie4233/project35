@@ -8,10 +8,13 @@ using UnityEngine.InputSystem;
 using RaycastHit = Unity.Physics.RaycastHit;
 
 [UpdateInGroup(typeof(SimulationSystemGroup))]
+[DisableAutoCreation]
 public partial class VoxelInteractionSystem : SystemBase
 {
     protected override void OnUpdate()
     {
+        /*
+        // This system is disabled in favor of VoxelColorSystem.
         // 1. Check for Input (T key = Dig, Right Mouse = Build)
         if (Mouse.current == null || Keyboard.current == null) return;
 
@@ -128,5 +131,6 @@ public partial class VoxelInteractionSystem : SystemBase
                 }
             }
         }
+        */
     }
 }
