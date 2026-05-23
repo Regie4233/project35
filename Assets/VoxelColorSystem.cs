@@ -23,19 +23,8 @@ public partial struct VoxelColorSystem : ISystem
     {
         if (Camera.main == null || Mouse.current == null) return;
 
-        // 1. Get Mouse/Screen Ray
-        UnityEngine.Ray cameraRay;
-        if (Cursor.lockState == CursorLockMode.Locked)
-        {
-            // Center of screen if camera lock is active
-            cameraRay = Camera.main.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
-        }
-        else
-        {
-            // Direct mouse position
-            Vector2 mousePos = Mouse.current.position.ReadValue();
-            cameraRay = Camera.main.ScreenPointToRay(new Vector3(mousePos.x, mousePos.y, 0f));
-        }
+        // 1. Get Camera Center Ray
+        UnityEngine.Ray cameraRay = Camera.main.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0f));
 
         // 2. Query Physics World
         if (!SystemAPI.TryGetSingleton<PhysicsWorldSingleton>(out var physicsWorldSingleton)) return;
@@ -47,6 +36,12 @@ public partial struct VoxelColorSystem : ISystem
             End = cameraRay.origin + (cameraRay.direction * rayLength),
             Filter = CollisionFilter.Default
         };
+
+        // Draw a red line in the Scene view for 2 seconds when you click
+        if (Mouse.current.leftButton.wasPressedThisFrame)
+        {
+            Debug.DrawRay(cameraRay.origin, cameraRay.direction * rayLength, Color.red, 2.0f);
+        }
 
         bool hitVoxelChunk = false;
         float3 hitPosition = float3.zero;
@@ -62,6 +57,17 @@ public partial struct VoxelColorSystem : ISystem
                 hitPosition = hit.Position;
                 hitChunkEntity = hit.Entity;
             }
+            
+            // Log if we click and hit something that IS NOT a chunk
+            if (Mouse.current.leftButton.wasPressedThisFrame && !hitVoxelChunk)
+            {
+                Debug.Log($"[VoxelColorSystem] Ray hit Entity {hit.Entity.Index}, but it lacks ChunkCoordinate or VoxelDataElement.");
+            }
+        }
+        else if (Mouse.current.leftButton.wasPressedThisFrame)
+        {
+            // Log if we click and hit absolutely nothing
+            Debug.Log("[VoxelColorSystem] Raycast did not hit any physics colliders.");
         }
 
         // 3. Update Cursor Target Indicator position/scale
@@ -78,9 +84,14 @@ public partial struct VoxelColorSystem : ISystem
             }
         }
 
-        // 4. Painting terrain on Left Click
+        // 4. Carving/Destroying terrain on Left Click
         if (hitVoxelChunk && Mouse.current.leftButton.isPressed)
         {
+            if (Mouse.current.leftButton.wasPressedThisFrame)
+            {
+                Debug.Log($"[VoxelColorSystem] Successfully hit Terrain Chunk {hitChunkEntity.Index} at {hitPosition}. Carving...");
+            }
+
             var entityManager = state.EntityManager;
             var settings = entityManager.GetComponentData<VoxelWorldSettings>(hitChunkEntity);
             var transform = entityManager.GetComponentData<LocalTransform>(hitChunkEntity);
@@ -114,27 +125,27 @@ public partial struct VoxelColorSystem : ISystem
                         {
                             int index = x + (y * pSize.x) + (z * pSize.x * pSize.y);
                             uint currentVal = voxelData[index].Value;
-                            int density = (int)(currentVal & 0xFF);
+                            int currentDensity = (int)(currentVal & 0xFF);
 
-                            // Only paint solid voxel surface (not air)
-                            if (density > (settings.IsoLevel * 255))
+                            // Subtract a large chunk of density
+                            int subtractAmount = 255; 
+                            
+                            int newDensity = math.max(0, currentDensity - subtractAmount);
+
+                            // If the density actually changed, update the voxel data
+                            if (newDensity != currentDensity)
                             {
-                                ushort currentMat = (ushort)((currentVal >> 8) & 0xFFFF);
-                                
-                                // Material ID 3 is Red / Custom Paint
-                                if (currentMat != 3)
-                                {
-                                    uint newVal = (currentVal & 0xFF0000FF) | (3u << 8); // Pack Material ID = 3
-                                    voxelData[index] = new VoxelDataElement { Value = newVal };
-                                    modified = true;
-                                }
+                                // Keep upper 24 bits (materials/flags), insert new density into lower 8 bits
+                                uint newVal = (currentVal & 0xFFFFFF00) | (uint)newDensity;
+                                voxelData[index] = new VoxelDataElement { Value = newVal };
+                                modified = true;
                             }
                         }
                     }
                 }
             }
 
-            // Trigger Remeshing if voxels were painted
+            // Trigger Remeshing if voxels were carved
             if (modified)
             {
                 // Request remesh by updating component tags on the chunk
