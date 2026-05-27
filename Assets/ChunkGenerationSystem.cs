@@ -4,232 +4,215 @@ using Unity.Entities;
 using Unity.Jobs;
 using Unity.Mathematics;
 using Unity.Physics;
+using Unity.Transforms;
 using UnityEngine;
 using UnityEngine.Rendering;
 
+[UpdateInGroup(typeof(InitializationSystemGroup))]
+[WorldSystemFilter(WorldSystemFilterFlags.Default | WorldSystemFilterFlags.Editor)]
 public partial class ChunkGenerationSystem : SystemBase
 {
-    private EntityQuery uninitializedGridQuery;
-    private EntityQuery noiseQuery;
-    private EntityQuery meshingQuery;
-    private EntityQuery collisionQuery;
-
     private NativeArray<int> edgeTable;
     private NativeArray<int> triTable;
+    private NativeHashSet<BlobAssetReference<Unity.Physics.Collider>> activeColliders;
     private UnityEngine.Material fallbackMaterial;
 
     protected override void OnCreate()
     {
-        uninitializedGridQuery = GetEntityQuery(ComponentType.ReadOnly<VoxelWorldSettings>(), ComponentType.Exclude<ChunkCoordinate>());
-        noiseQuery = GetEntityQuery(ComponentType.ReadOnly<VoxelWorldSettings>(), ComponentType.ReadOnly<ChunkNeedsNoiseTag>(), ComponentType.ReadWrite<VoxelDataElement>(), ComponentType.ReadOnly<ChunkCoordinate>());
-        meshingQuery = GetEntityQuery(ComponentType.ReadOnly<VoxelWorldSettings>(), ComponentType.ReadOnly<ChunkNeedsMeshingTag>(), ComponentType.ReadOnly<VoxelDataElement>());
-        collisionQuery = GetEntityQuery(ComponentType.ReadOnly<VoxelWorldSettings>(), ComponentType.ReadOnly<ChunkNeedsCollisionTag>());
-
         edgeTable = new NativeArray<int>(MarchingCubesTables.edgeTable, Allocator.Persistent);
         triTable = new NativeArray<int>(MarchingCubesTables.triTable, Allocator.Persistent);
+        activeColliders = new NativeHashSet<BlobAssetReference<Unity.Physics.Collider>>(256, Allocator.Persistent);
+        RequireForUpdate<VoxelWorldSettings>();
     }
 
     protected override void OnDestroy()
     {
         if (edgeTable.IsCreated) edgeTable.Dispose();
         if (triTable.IsCreated) triTable.Dispose();
+        if (fallbackMaterial != null) Object.DestroyImmediate(fallbackMaterial);
 
-        if (fallbackMaterial != null)
+        if (activeColliders.IsCreated)
         {
-            UnityEngine.Object.DestroyImmediate(fallbackMaterial);
+            foreach (var collider in activeColliders)
+            {
+                if (collider.IsCreated) collider.Dispose();
+            }
+            activeColliders.Dispose();
         }
     }
 
     protected override void OnUpdate()
     {
-        var ecb = new EntityCommandBuffer(Allocator.TempJob);
+        var ecb = new EntityCommandBuffer(Allocator.Temp);
 
-        try
+        // 1. Spawning
+        foreach (var (settings, entity) in SystemAPI.Query<RefRW<VoxelWorldSettings>>().WithNone<ChunkCoordinate>().WithEntityAccess())
         {
-            // 1. Initialize Grid
-            if (!uninitializedGridQuery.IsEmptyIgnoreFilter)
+            // Only spawn if we haven't already marked this authoring entity
+            Debug.Log($"[ChunkGenerationSystem] Spawning grid {settings.ValueRO.GridSize.x}x{settings.ValueRO.GridSize.z} on entity {entity}...");
+            
+            for (int x = 0; x < settings.ValueRO.GridSize.x; x++)
             {
-                using var entities = uninitializedGridQuery.ToEntityArray(Allocator.Temp);
-                using var settings = uninitializedGridQuery.ToComponentDataArray<VoxelWorldSettings>(Allocator.Temp);
-
-                for (int i = 0; i < entities.Length; i++)
+                for (int y = 0; y < settings.ValueRO.GridSize.y; y++)
                 {
-                    var authoringEntity = entities[i];
-                    var authoringSettings = settings[i];
-                    var authoringMaterial = EntityManager.GetComponentObject<VoxelMaterialComponent>(authoringEntity);
-
-                    for (int x = 0; x < authoringSettings.GridSize.x; x++)
+                    for (int z = 0; z < settings.ValueRO.GridSize.z; z++)
                     {
-                        for (int y = 0; y < authoringSettings.GridSize.y; y++)
-                        {
-                            for (int z = 0; z < authoringSettings.GridSize.z; z++)
-                            {
-                                var chunkEntity = ecb.Instantiate(authoringEntity);
-                                
-                                // Generate a random offset for this world generation
-                                if (x == 0 && y == 0 && z == 0 && authoringSettings.NoiseOffset.Equals(float2.zero))
-                                {
-                                    authoringSettings.NoiseOffset = new float2(UnityEngine.Random.Range(-10000f, 10000f), UnityEngine.Random.Range(-10000f, 10000f));
-                                }
-                                
-                                ecb.SetComponent(chunkEntity, authoringSettings);
-                                ecb.AddComponent(chunkEntity, new ChunkCoordinate { Value = new int3(x, y, z) });
-                                ecb.AddComponent<ChunkNeedsNoiseTag>(chunkEntity);
-                                // Apply translation so chunks don't overlap
-                                ecb.AddComponent(chunkEntity, new Unity.Transforms.LocalTransform
-                                {
-                                    Position = new float3(x * authoringSettings.ChunkSize.x, y * authoringSettings.ChunkSize.y, z * authoringSettings.ChunkSize.z),
-                                    Rotation = quaternion.identity,
-                                    Scale = 1f
-                                });
-                                ecb.AddComponent<Unity.Transforms.LocalToWorld>(chunkEntity);
+                        var chunkEntity = ecb.Instantiate(entity);
+                        ecb.AddComponent(chunkEntity, new ChunkCoordinate { Value = new int3(x, y, z) });
+                        ecb.AddComponent<ChunkNeedsNoiseTag>(chunkEntity);
+                        
+                        float3 pos = new float3(x * settings.ValueRO.ChunkSize.x, y * settings.ValueRO.ChunkSize.y, z * settings.ValueRO.ChunkSize.z);
+                        ecb.AddComponent(chunkEntity, LocalTransform.FromPosition(pos));
+                        ecb.AddComponent<LocalToWorld>(chunkEntity);
 
-                                var buffer = ecb.AddBuffer<VoxelDataElement>(chunkEntity);
-                            int3 pSize = authoringSettings.ChunkSize + 1;
-                            buffer.ResizeUninitialized(pSize.x * pSize.y * pSize.z);
-                        }
+                        var buffer = ecb.AddBuffer<VoxelDataElement>(chunkEntity);
+                        int3 pSize = settings.ValueRO.ChunkSize + 1;
+                        buffer.ResizeUninitialized(pSize.x * pSize.y * pSize.z);
                     }
                 }
-
-                // Destroy the authoring entity so we don't process it again
-                ecb.DestroyEntity(authoringEntity);
             }
+            // Mark the authoring entity so it doesn't trigger spawning again
+            ecb.AddComponent(entity, new ChunkCoordinate { Value = new int3(-1) });
         }
 
-        // 2. Generate Noise
-        if (!noiseQuery.IsEmptyIgnoreFilter)
+        // 2. Noise Generation
+        foreach (var (settings, coord, voxelBuffer, entity) in SystemAPI.Query<RefRO<VoxelWorldSettings>, RefRO<ChunkCoordinate>, DynamicBuffer<VoxelDataElement>>().WithAll<ChunkNeedsNoiseTag>().WithEntityAccess())
         {
-            using var entities = noiseQuery.ToEntityArray(Allocator.Temp);
-            using var settings = noiseQuery.ToComponentDataArray<VoxelWorldSettings>(Allocator.Temp);
-            using var coordinates = noiseQuery.ToComponentDataArray<ChunkCoordinate>(Allocator.Temp);
-
-            for (int i = 0; i < entities.Length; i++)
+            var noiseJob = new NoiseGenerationJob
             {
-                var entity = entities[i];
-                var chunkSettings = settings[i];
-                var coord = coordinates[i].Value;
+                ChunkSize = settings.ValueRO.ChunkSize,
+                ChunkWorldPosition = new float3(coord.ValueRO.Value.x * settings.ValueRO.ChunkSize.x, coord.ValueRO.Value.y * settings.ValueRO.ChunkSize.y, coord.ValueRO.Value.z * settings.ValueRO.ChunkSize.z),
+                NoiseScale = settings.ValueRO.NoiseScale,
+                IsoLevel = settings.ValueRO.IsoLevel,
+                NoiseOffset = settings.ValueRO.NoiseOffset,
+                VoxelData = voxelBuffer.AsNativeArray()
+            };
 
-                var voxelBuffer = EntityManager.GetBuffer<VoxelDataElement>(entity);
-                var voxelArray = voxelBuffer.AsNativeArray();
+            int3 pSize = settings.ValueRO.ChunkSize + 1;
+            noiseJob.Schedule(pSize.x * pSize.y * pSize.z, 64).Complete();
 
-                var noiseJob = new NoiseGenerationJob
-                {
-                    ChunkSize = chunkSettings.ChunkSize,
-                    ChunkWorldPosition = new float3(coord.x * chunkSettings.ChunkSize.x, coord.y * chunkSettings.ChunkSize.y, coord.z * chunkSettings.ChunkSize.z),
-                    NoiseScale = chunkSettings.NoiseScale,
-                    IsoLevel = chunkSettings.IsoLevel,
-                    NoiseOffset = chunkSettings.NoiseOffset,
-                    VoxelData = voxelArray
-                };
+            ecb.RemoveComponent<ChunkNeedsNoiseTag>(entity);
+            ecb.AddComponent<ChunkNeedsMeshingTag>(entity);
+        }
 
-                int3 pSize = chunkSettings.ChunkSize + 1;
-                noiseJob.Schedule(pSize.x * pSize.y * pSize.z, 64).Complete(); // Wait for completion for simplicity
+        // 3. Meshing
+        var vertices = new NativeList<float3>(Allocator.Temp);
+        var indices = new NativeList<ushort>(Allocator.Temp);
+        var normals = new NativeList<float3>(Allocator.Temp);
+        var uvs = new NativeList<float2>(Allocator.Temp);
+        var colors = new NativeList<float4>(Allocator.Temp);
 
-                    ecb.RemoveComponent<ChunkNeedsNoiseTag>(entity);
-                    ecb.AddComponent<ChunkNeedsMeshingTag>(entity);
-                }
-            }
+        // We collect chunks that need setup to avoid structural changes while querying
+        var chunksToInitialize = new System.Collections.Generic.List<(Entity entity, Mesh mesh, UnityEngine.Material mat, BlobAssetReference<Unity.Physics.Collider> collider)>();
 
-            // 3. Generate Mesh
-            if (!meshingQuery.IsEmptyIgnoreFilter)
+        foreach (var (settings, voxelBuffer, entity) in SystemAPI.Query<RefRO<VoxelWorldSettings>, DynamicBuffer<VoxelDataElement>>().WithAll<ChunkNeedsMeshingTag>().WithEntityAccess())
+        {
+            vertices.Clear();
+            indices.Clear();
+            normals.Clear();
+            uvs.Clear();
+            colors.Clear();
+
+            var meshingJob = new MarchingCubesJob
             {
-                using var entities = meshingQuery.ToEntityArray(Allocator.Temp);
-                using var settings = meshingQuery.ToComponentDataArray<VoxelWorldSettings>(Allocator.Temp);
+                VoxelData = voxelBuffer.AsNativeArray(),
+                ChunkSize = settings.ValueRO.ChunkSize,
+                IsoLevel = settings.ValueRO.IsoLevel,
+                Vertices = vertices,
+                Indices = indices,
+                Normals = normals,
+                UVs = uvs,
+                Colors = colors,
+                EdgeTable = edgeTable,
+                TriTable = triTable
+            };
 
-                using var vertices = new NativeList<float3>(Allocator.TempJob);
-                using var indices = new NativeList<ushort>(Allocator.TempJob);
-                using var normals = new NativeList<float3>(Allocator.TempJob);
-                using var uvs = new NativeList<float2>(Allocator.TempJob);
-                using var colors = new NativeList<float4>(Allocator.TempJob);
+            meshingJob.Execute();
 
-                for (int i = 0; i < entities.Length; i++)
+            if (vertices.Length > 0)
+            {
+                var mesh = new Mesh();
+                mesh.SetVertices(vertices.AsArray());
+                mesh.SetIndices(indices.AsArray(), MeshTopology.Triangles, 0);
+                mesh.SetNormals(normals.AsArray());
+                mesh.SetUVs(0, uvs.AsArray());
+                mesh.SetColors(colors.AsArray());
+                mesh.RecalculateBounds();
+
+                var materialComp = EntityManager.GetComponentObject<VoxelMaterialComponent>(entity);
+                UnityEngine.Material mat = materialComp.Material;
+                if (mat == null)
                 {
-                    var entity = entities[i];
-                    var chunkSettings = settings[i];
-
-                    var voxelBuffer = EntityManager.GetBuffer<VoxelDataElement>(entity);
-
-                    vertices.Clear();
-                    indices.Clear();
-                    normals.Clear();
-                    uvs.Clear();
-                    colors.Clear();
-
-                    var meshingJob = new MarchingCubesJob
+                    if (fallbackMaterial == null)
                     {
-                        VoxelData = voxelBuffer.AsNativeArray(),
-                        ChunkSize = chunkSettings.ChunkSize,
-                        IsoLevel = chunkSettings.IsoLevel,
-                        Vertices = vertices,
-                        Indices = indices,
-                        Normals = normals,
-                        UVs = uvs,
-                        Colors = colors,
-                        EdgeTable = edgeTable,
-                        TriTable = triTable
-                    };
-
-                    meshingJob.Schedule().Complete(); // Wait for completion
-
-                    if (vertices.Length > 0)
-                    {
-                        var mesh = new Mesh();
-                        mesh.SetVertices(vertices.AsArray());
-                        mesh.SetIndices(indices.AsArray(), MeshTopology.Triangles, 0);
-                        mesh.SetNormals(normals.AsArray());
-                        mesh.SetUVs(0, uvs.AsArray());
-                        mesh.SetColors(colors.AsArray());
-                        mesh.RecalculateBounds();
-
-                        var materialComp = EntityManager.GetComponentObject<VoxelMaterialComponent>(entity);
-                        UnityEngine.Material mat = materialComp.Material;
-                        if (mat == null)
-                        {
-                            if (fallbackMaterial == null)
-                            {
-                                Shader shader = Shader.Find("Custom/VoxelVertexColor");
-                                if (shader == null) shader = Shader.Find("Universal Render Pipeline/Lit");
-                                if (shader != null)
-                                {
-                                    fallbackMaterial = new UnityEngine.Material(shader);
-                                }
-                            }
-                            mat = fallbackMaterial;
-                        }
-                        ChunkRendererSetup.InitializeChunkRendering(EntityManager, entity, mesh, mat);
-
-                        // Simple physics
-                        var triangleIndices = new NativeArray<int3>(indices.Length / 3, Allocator.Temp);
-                        for (int t = 0; t < indices.Length; t += 3)
-                        {
-                            triangleIndices[t / 3] = new int3(indices[t], indices[t + 1], indices[t + 2]);
-                        }
-                        var meshCollider = Unity.Physics.MeshCollider.Create(vertices.AsArray(), triangleIndices, CollisionFilter.Default);
-                        
-                        // IMPORTANT: Dispose of old collider if it exists to prevent leaks
-                        if (EntityManager.HasComponent<PhysicsCollider>(entity))
-                        {
-                            var oldCollider = EntityManager.GetComponentData<PhysicsCollider>(entity);
-                            oldCollider.Value.Dispose();
-                        }
-                        
-                        ecb.AddComponent(entity, new PhysicsCollider { Value = meshCollider });
-                        // We must NOT dispose it here if we want it to stay alive on the entity, 
-                        // but Unity.Physics.MeshCollider.Create produces a persistent BlobAssetReference.
-                        // However, if this system runs multiple times and recreates colliders, it leaks.
-                        triangleIndices.Dispose();
+                        Shader shader = Shader.Find("Custom/VoxelVertexColor");
+                        if (shader == null) shader = Shader.Find("Universal Render Pipeline/Lit");
+                        if (shader != null) fallbackMaterial = new UnityEngine.Material(shader);
                     }
+                    mat = fallbackMaterial;
+                }
 
-                    ecb.RemoveComponent<ChunkNeedsMeshingTag>(entity);
-                    ecb.AddComponent<ChunkReadyTag>(entity);
+                int numTriangles = indices.Length / 3;
+                var triangleIndices = new NativeArray<int3>(numTriangles * 2, Allocator.Temp);
+                for (int t = 0; t < indices.Length; t += 3) 
+                {
+                    triangleIndices[t / 3] = new int3(indices[t], indices[t + 1], indices[t + 2]);
+                    triangleIndices[numTriangles + (t / 3)] = new int3(indices[t], indices[t + 2], indices[t + 1]);
+                }
+                
+                var meshCollider = Unity.Physics.MeshCollider.Create(
+                    vertices.AsArray(), 
+                    triangleIndices, 
+                    CollisionFilter.Default, 
+                    Unity.Physics.Material.Default
+                );
+                triangleIndices.Dispose();
+
+                activeColliders.Add(meshCollider);
+                chunksToInitialize.Add((entity, mesh, mat, meshCollider));
+                if (math.distance(math.transform(EntityManager.GetComponentData<LocalToWorld>(entity).Value, mesh.bounds.center), new float3(80, 8, 80)) < 25f) {
+                    Debug.Log($"[ChunkGenerationSystem] Chunk at {EntityManager.GetComponentData<LocalTransform>(entity).Position} generated {vertices.Length} vertices and {indices.Length/3} triangles.");
                 }
             }
 
-            ecb.Playback(EntityManager);
+            ecb.RemoveComponent<ChunkNeedsMeshingTag>(entity);
+            ecb.AddComponent<ChunkReadyTag>(entity);
         }
-        finally
+
+        // Apply structural changes outside the query loop
+        foreach (var item in chunksToInitialize)
         {
-            ecb.Dispose();
+            ChunkRendererSetup.InitializeChunkRendering(EntityManager, item.entity, item.mesh, item.mat);
+            
+            if (EntityManager.HasComponent<PhysicsCollider>(item.entity))
+            {
+                var oldCollider = EntityManager.GetComponentData<PhysicsCollider>(item.entity);
+                if (oldCollider.Value.IsCreated)
+                {
+                    activeColliders.Remove(oldCollider.Value);
+                    oldCollider.Value.Dispose();
+                }
+                EntityManager.SetComponentData(item.entity, new PhysicsCollider { Value = item.collider });
+            }
+            else
+            {
+                EntityManager.AddComponentData(item.entity, new PhysicsCollider { Value = item.collider });
+            }
+
+            if (!EntityManager.HasComponent<PhysicsWorldIndex>(item.entity))
+            {
+                EntityManager.AddSharedComponent(item.entity, new PhysicsWorldIndex { Value = 0 });
+            }
         }
+
+        ecb.Playback(EntityManager);
+        ecb.Dispose();
+        
+        vertices.Dispose();
+        indices.Dispose();
+        normals.Dispose();
+        uvs.Dispose();
+        colors.Dispose();
     }
 }
+

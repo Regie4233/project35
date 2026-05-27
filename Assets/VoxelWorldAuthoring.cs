@@ -19,6 +19,7 @@ public class VoxelMaterialComponent : IComponentData
 }
 
 // 3. The Authoring MonoBehaviour (Attached to a GameObject in the Editor)
+// Dummy comment to force bake
 public class VoxelWorldAuthoring : MonoBehaviour
 {
    
