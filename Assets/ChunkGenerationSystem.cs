@@ -48,8 +48,11 @@ public partial class ChunkGenerationSystem : SystemBase
         // 1. Spawning
         foreach (var (settings, entity) in SystemAPI.Query<RefRW<VoxelWorldSettings>>().WithNone<ChunkCoordinate>().WithEntityAccess())
         {
+            // Randomize the noise offset if not already explicitly set to something large, or just always randomize it so it's different each time.
+            settings.ValueRW.NoiseOffset = new float2(UnityEngine.Random.Range(-100000f, 100000f), UnityEngine.Random.Range(-100000f, 100000f));
+            
             // Only spawn if we haven't already marked this authoring entity
-            Debug.Log($"[ChunkGenerationSystem] Spawning grid {settings.ValueRO.GridSize.x}x{settings.ValueRO.GridSize.z} on entity {entity}...");
+            Debug.Log($"[ChunkGenerationSystem] Spawning grid {settings.ValueRO.GridSize.x}x{settings.ValueRO.GridSize.z} on entity {entity} with NoiseOffset {settings.ValueRO.NoiseOffset}...");
             
             for (int x = 0; x < settings.ValueRO.GridSize.x; x++)
             {
