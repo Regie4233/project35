@@ -41,7 +41,7 @@ public struct MarchingCubesJob : IJob
         NativeArray<float> cubeValues = new NativeArray<float>(8, Allocator.Temp);
         NativeArray<float3> edgeVertices = new NativeArray<float3>(12, Allocator.Temp);
 
-        int3 pSize = ChunkSize + 1;
+        int3 pSize = ChunkSize + 5;
 
         for (int z = 0; z < ChunkSize.z; z++)
         {
@@ -52,7 +52,7 @@ public struct MarchingCubesJob : IJob
                     int cubeIndex = 0;
                     for (int i = 0; i < 8; i++)
                     {
-                        int3 p = new int3(x, y, z) + (int3)cornerOffsets[i];
+                        int3 p = new int3(x, y, z) + (int3)cornerOffsets[i] + 2; // +2 to account for padding
                         int flatIndex = p.x + (p.y * pSize.x) + (p.z * pSize.x * pSize.y);
                         cubeValues[i] = VoxelData[flatIndex].GetDensity();
                         if (cubeValues[i] > threshold) cubeIndex |= 1 << i;
@@ -108,8 +108,9 @@ public struct MarchingCubesJob : IJob
 
     private float GetDensityInterpolated(float3 pos)
     {
-        int3 pSize = ChunkSize + 1;
-        int3 p0 = (int3)math.floor(pos);
+        int3 pSize = ChunkSize + 5;
+
+        int3 p0 = (int3)math.floor(pos) + 2; // +2 to account for padding
         int3 p1 = p0 + 1;
         p0 = math.clamp(p0, 0, pSize - 1);
         p1 = math.clamp(p1, 0, pSize - 1);

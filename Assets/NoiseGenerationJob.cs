@@ -28,14 +28,15 @@ public struct NoiseGenerationJob : IJobParallelFor
     public void Execute(int index)
     {
         // Use padded dimensions for indexing
-        int3 pSize = ChunkSize + 1;
+        int3 pSize = ChunkSize + 5;
         
         // Unflatten the 1D index back into 3D local coordinates
         int x = index % pSize.x;
         int y = (index / pSize.x) % pSize.y;
         int z = index / (pSize.x * pSize.y);
 
-        float3 worldPos = ChunkWorldPosition + new float3(x, y, z);
+        // Offset the 3D local coordinates by -2 to center the padding around the 0-16 chunk bounds
+        float3 worldPos = ChunkWorldPosition + new float3(x - 2, y - 2, z - 2);
         
         // A. Domain Warping for Coastal Islands
         float warpX = worldPos.x + noise.cnoise(new float2(worldPos.x + NoiseOffset.x, worldPos.z) * WarpScale) * WarpIntensity;

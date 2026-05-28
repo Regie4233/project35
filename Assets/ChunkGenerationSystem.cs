@@ -69,7 +69,7 @@ public partial class ChunkGenerationSystem : SystemBase
                         ecb.AddComponent<LocalToWorld>(chunkEntity);
 
                         var buffer = ecb.AddBuffer<VoxelDataElement>(chunkEntity);
-                        int3 pSize = settings.ValueRO.ChunkSize + 1;
+                        int3 pSize = settings.ValueRO.ChunkSize + 5;
                         buffer.ResizeUninitialized(pSize.x * pSize.y * pSize.z);
                     }
                 }
@@ -101,7 +101,7 @@ public partial class ChunkGenerationSystem : SystemBase
                 VoxelData = voxelBuffer.AsNativeArray()
             };
 
-            int3 pSize = settings.ValueRO.ChunkSize + 1;
+            int3 pSize = settings.ValueRO.ChunkSize + 5;
             noiseJob.Schedule(pSize.x * pSize.y * pSize.z, 64).Complete();
 
             ecb.RemoveComponent<ChunkNeedsNoiseTag>(entity);
