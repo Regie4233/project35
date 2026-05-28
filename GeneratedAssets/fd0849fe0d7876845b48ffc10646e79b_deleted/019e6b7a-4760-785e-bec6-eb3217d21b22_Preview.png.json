@@ -1,0 +1,12 @@
+{
+  "asset": "fd0849fe0d7876845b48ffc10646e79b",
+  "fileName": "019e6b7a-4760-785e-bec6-eb3217d21b22_Preview.png",
+  "prompt": "forest grass",
+  "negativePrompt": "",
+  "model": "gemini-3.1-flash-texture",
+  "modelName": "Gemini 3.1 Nano Banana 2",
+  "customSeed": 1720910659,
+  "w3CTraceId": "",
+  "feedback": 1,
+  "refinementMode": "Generation"
+}

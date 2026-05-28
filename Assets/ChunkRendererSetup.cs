@@ -1,4 +1,5 @@
 using Unity.Entities;
+using Unity.Entities.Graphics;
 using Unity.Rendering;
 using UnityEngine;
 using UnityEngine.Rendering;
