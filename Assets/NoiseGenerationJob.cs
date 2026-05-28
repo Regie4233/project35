@@ -17,8 +17,12 @@ public struct NoiseGenerationJob : IJobParallelFor
     public float WarpIntensity;
     public float MountainScale;
     public float MountainHeight;
+    public int Octaves;
+    public float Persistence;
+    public float Lacunarity;
     public float TrenchScale;
     public float TrenchDepth;
+    public float TrenchWidth;
     public float MaxSkyHeight;
     public float MaxBedrockDepth;
     public float SeaLevel;
@@ -54,21 +58,7 @@ public struct NoiseGenerationJob : IJobParallelFor
             // Ocean: deepen it based on how far out to sea we are
             density += continentalness * 20.0f;
             
-            // D. Trench Fractures (Only in the deep ocean!)
-            if (continentalness < -0.1f)
-            {
-                float trenchLine = math.abs(noise.cnoise(new float2(worldPos.x + NoiseOffset.x, worldPos.z + NoiseOffset.y) * TrenchScale));
-                if (trenchLine < 0.05f)
-                {
-                    // Taper the trench depth based on how close to the center of the line it is
-                    float trenchMultiplier = 1.0f - (trenchLine / 0.05f);
-                    
-                    // Taper the trench based on continentalness so it doesn't create a sudden cliff where it turns on!
-                    float oceanDepthBlend = math.smoothstep(-0.1f, -0.3f, continentalness);
-                    
-                    density -= TrenchDepth * trenchMultiplier * oceanDepthBlend;
-                }
-            }
+
         }
         else
         {
@@ -81,32 +71,42 @@ public struct NoiseGenerationJob : IJobParallelFor
             // E. Meso Topography (Hills & Mountains, Only on Land)
             // General rolling hills for all inland areas (Blended in smoothly so no sudden cliffs)
             float hillNoise = noise.cnoise(new float2(worldPos.x + NoiseOffset.x, worldPos.z + NoiseOffset.y) * (MountainScale * 0.5f));
-            float hillBlend = math.smoothstep(0.0f, 0.1f, continentalness);
+            float hillBlend = math.smoothstep(0.1f, 0.4f, continentalness);
             density += hillNoise * 5.0f * hillBlend;
             
             // Create a mountain mask so mountains only spawn in specific "mountain ranges"
             float mountainMask = noise.cnoise(new float2(worldPos.x + NoiseOffset.x, worldPos.z + NoiseOffset.y) * (ContinentScale * 2.0f));
             
             // Add sharp mountains only if we are significantly inland AND the mountain mask is high
-            if (continentalness > 0.1f && mountainMask > 0.1f)
+            if (continentalness > 0.3f && mountainMask > 0.1f)
             {
-                float peakValue = 1.0f - math.abs(noise.cnoise(new float2(worldPos.x + NoiseOffset.x, worldPos.z + NoiseOffset.y) * MountainScale));
-                float rawMountainHeight = peakValue * peakValue * MountainHeight;
+                float2 pos = new float2(worldPos.x + NoiseOffset.x, worldPos.z + NoiseOffset.y) * MountainScale;
                 
-                // --- STEPPED CLIFFS (Terracing) ---
-                // We divide the mountain into 6-unit high "steps" or "terraces"
-                float terraceStepHeight = 6.0f;
-                float steppedMountainHeight = math.round(rawMountainHeight / terraceStepHeight) * terraceStepHeight;
-                
-                // We blend the stepped height and raw height (0.7f means it's 70% stepped, 30% smooth)
-                // This keeps the cliffs distinct but softens the sharp 90-degree corners so marching cubes renders them better
-                float finalMountainHeight = math.lerp(rawMountainHeight, steppedMountainHeight, 0.7f);
+                float total = 0f;
+                float frequency = 1f;
+                float amplitude = 1f;
+                float maxValue = 0f;
+
+                for (int i = 0; i < Octaves; i++)
+                {
+                    // noise.cnoise returns -1 to 1.
+                    // We use 1.0f - math.abs to create "ridges" (sharp peaks, wide valleys)
+                    float n = 1.0f - math.abs(noise.cnoise(pos * frequency));
+                    n *= n; // Square it for sharper peaks
+                    total += n * amplitude;
+                    maxValue += amplitude;
+                    
+                    amplitude *= Persistence;
+                    frequency *= Lacunarity;
+                }
+
+                float fbmHeight = (total / maxValue) * MountainHeight;
                 
                 // Smoothly blend the mountains in based on the mask and how far inland we are
                 float maskBlend = math.smoothstep(0.1f, 0.4f, mountainMask);
-                float continentalBlend = math.smoothstep(0.1f, 0.3f, continentalness);
+                float continentalBlend = math.smoothstep(0.3f, 0.6f, continentalness);
                 
-                density += finalMountainHeight * maskBlend * continentalBlend;
+                density += fbmHeight * maskBlend * continentalBlend;
             }
         }
 

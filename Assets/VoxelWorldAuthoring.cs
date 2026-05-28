@@ -16,8 +16,15 @@ public struct VoxelWorldSettings : IComponentData
     public float WarpIntensity;
     public float MountainScale;
     public float MountainHeight;
+    
+    // fBm Settings
+    public int Octaves;
+    public float Persistence;
+    public float Lacunarity;
+    
     public float TrenchScale;
     public float TrenchDepth;
+    public float TrenchWidth;
     public float MaxSkyHeight;
     public float MaxBedrockDepth;
     public float SeaLevel;
@@ -48,8 +55,16 @@ public class VoxelWorldAuthoring : MonoBehaviour
     public float WarpIntensity = 20f;
     public float MountainScale = 0.03f;
     public float MountainHeight = 25f;
+    
+    [Header("Mountain Detail (fBm)")]
+    public int Octaves = 4;
+    public float Persistence = 0.5f;
+    public float Lacunarity = 2.0f;
+    
+    [Header("Trenches")]
     public float TrenchScale = 0.05f;
     public float TrenchDepth = 30f;
+    public float TrenchWidth = 0.05f;
     
     [Header("World Limits")]
     public float SeaLevel = 25f; // Positioned comfortably within the 64-unit vertical space
@@ -79,8 +94,12 @@ public class VoxelWorldAuthoring : MonoBehaviour
                 WarpIntensity = authoring.WarpIntensity,
                 MountainScale = authoring.MountainScale,
                 MountainHeight = authoring.MountainHeight,
+                Octaves = authoring.Octaves,
+                Persistence = authoring.Persistence,
+                Lacunarity = authoring.Lacunarity,
                 TrenchScale = authoring.TrenchScale,
                 TrenchDepth = authoring.TrenchDepth,
+                TrenchWidth = authoring.TrenchWidth,
                 MaxSkyHeight = authoring.MaxSkyHeight,
                 MaxBedrockDepth = authoring.MaxBedrockDepth,
                 SeaLevel = authoring.SeaLevel,
