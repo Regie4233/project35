@@ -8,11 +8,21 @@ public struct NoiseGenerationJob : IJobParallelFor
 {
     public int3 ChunkSize;
     public float3 ChunkWorldPosition;
-    public float NoiseScale;
+    public float NoiseScale; // Base scale (kept for legacy/base use if needed)
     public float IsoLevel;
     public float2 NoiseOffset;
-
     
+    public float ContinentScale;
+    public float WarpScale;
+    public float WarpIntensity;
+    public float MountainScale;
+    public float MountainHeight;
+    public float TrenchScale;
+    public float TrenchDepth;
+    public float MaxSkyHeight;
+    public float MaxBedrockDepth;
+    public float SeaLevel;
+
     public NativeArray<VoxelDataElement> VoxelData;
 
     public void Execute(int index)
@@ -27,39 +37,56 @@ public struct NoiseGenerationJob : IJobParallelFor
 
         float3 worldPos = ChunkWorldPosition + new float3(x, y, z);
         
-        // 2D Heightmap Noise (Base terrain shape)
-        float2 pos2D = (new float2(worldPos.x, worldPos.z) + NoiseOffset) * NoiseScale * 0.5f;
-        float heightNoise = noise.cnoise(pos2D);
-        // Normalize roughly to 0..1 and scale up by chunk height max (e.g. 16 or 32)
-        // Adjust baseline so it looks okay.
-        float baseHeight = ChunkSize.y * 0.5f + (heightNoise * ChunkSize.y * 0.4f);
+        // A. Domain Warping for Coastal Islands
+        float warpX = worldPos.x + noise.cnoise(new float2(worldPos.x + NoiseOffset.x, worldPos.z) * WarpScale) * WarpIntensity;
+        float warpZ = worldPos.z + noise.cnoise(new float2(worldPos.x, worldPos.z + NoiseOffset.y) * WarpScale) * WarpIntensity;
 
-        // 3D Noise (Caves, overhangs, detail)
-        float3 pos3D = worldPos + new float3(NoiseOffset.x, 0, NoiseOffset.y);
-        float detailNoise = noise.cnoise(pos3D * NoiseScale * 2f);
-
-        // Calculate raw density
-        // Higher y = lower density (above ground)
-        // Lower y = higher density (underground)
-        // detailNoise modifies the density threshold
-        float densityFloat = (baseHeight - worldPos.y) + (detailNoise * 5f);
-
-        // Normalize density to roughly -1 to 1 for byte mapping
-        float normalizedDensity = math.clamp(densityFloat / 10f, -1f, 1f);
-
-        // Convert the noise float to a 0-255 density byte.
-        // We will consider 128 as the surface iso-level.
-        byte density = (byte)math.clamp((normalizedDensity + 1f) * 127.5f, 0, 255);
+        // B. Continental Mask
+        float landNoise = noise.cnoise(new float2(warpX, warpZ) * ContinentScale);
         
-        // If density is higher than our threshold (isoLevel scaled to 0-255), it's solid terrain
-        bool isSolid = density > (IsoLevel * 255);
+        // Start with a density based on height vs SeaLevel
+        float density = (SeaLevel - worldPos.y);
         
-        // Simple multiple materials
-        // e.g. Deep underground = stone (2), near surface = dirt/grass (1), air = (0)
+        // Add the continental landmass height (scale it so continents are significantly higher than ocean floor)
+        density += landNoise * 40.0f; 
+
+        // C. Meso Topography (Ridge Noise for Tectonic Mountains)
+        float peakValue = 1.0f - math.abs(noise.cnoise(new float2(worldPos.x + NoiseOffset.x, worldPos.z + NoiseOffset.y) * MountainScale));
+        float mountainHeight = peakValue * peakValue * MountainHeight;
+        
+        // Only apply mountains on land areas
+        if (landNoise > -0.2f)
+        {
+            density += mountainHeight;
+        }
+
+        // D. Trench Fractures (Inverted Valley Selection)
+        float trenchLine = math.abs(noise.cnoise(new float2(worldPos.x + NoiseOffset.x, worldPos.z + NoiseOffset.y) * TrenchScale));
+        if (trenchLine < 0.05f)
+        {
+            // Taper the trench depth based on how close to the center of the line it is
+            float trenchMultiplier = 1.0f - (trenchLine / 0.05f);
+            density -= TrenchDepth * trenchMultiplier;
+        }
+
+        // Hard Vertical Limits
+        if (worldPos.y > MaxSkyHeight) density -= 1000.0f;
+        if (worldPos.y < MaxBedrockDepth) density += 1000.0f;
+
+        // Normalize density to roughly -1 to 1 for byte mapping (10 units = 1 normalized unit)
+        float normalizedDensity = math.clamp(density / 10f, -1f, 1f);
+
+        // Convert the noise float to a 0-255 density byte
+        byte finalDensityByte = (byte)math.clamp((normalizedDensity + 1f) * 127.5f, 0, 255);
+        
+        // Solid check against IsoLevel
+        bool isSolid = finalDensityByte > (IsoLevel * 255);
+        
+        // Material assignment
         ushort materialId = 0;
         if (isSolid)
         {
-            if (worldPos.y < baseHeight - 3)
+            if (worldPos.y < SeaLevel - 3)
             {
                 materialId = 2; // Stone
             }
@@ -69,8 +96,8 @@ public struct NoiseGenerationJob : IJobParallelFor
             }
         }
         
-        // Pack data into the unsigned integer
-        uint packedData = density;
+        // Pack data
+        uint packedData = finalDensityByte;
         packedData |= (uint)(materialId << 8);
         if (isSolid)
         {

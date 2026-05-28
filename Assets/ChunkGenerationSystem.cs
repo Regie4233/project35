@@ -88,6 +88,16 @@ public partial class ChunkGenerationSystem : SystemBase
                 NoiseScale = settings.ValueRO.NoiseScale,
                 IsoLevel = settings.ValueRO.IsoLevel,
                 NoiseOffset = settings.ValueRO.NoiseOffset,
+                ContinentScale = settings.ValueRO.ContinentScale,
+                WarpScale = settings.ValueRO.WarpScale,
+                WarpIntensity = settings.ValueRO.WarpIntensity,
+                MountainScale = settings.ValueRO.MountainScale,
+                MountainHeight = settings.ValueRO.MountainHeight,
+                TrenchScale = settings.ValueRO.TrenchScale,
+                TrenchDepth = settings.ValueRO.TrenchDepth,
+                MaxSkyHeight = settings.ValueRO.MaxSkyHeight,
+                MaxBedrockDepth = settings.ValueRO.MaxBedrockDepth,
+                SeaLevel = settings.ValueRO.SeaLevel,
                 VoxelData = voxelBuffer.AsNativeArray()
             };
 
