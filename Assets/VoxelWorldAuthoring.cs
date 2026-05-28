@@ -21,6 +21,7 @@ public struct VoxelWorldSettings : IComponentData
     public float MaxSkyHeight;
     public float MaxBedrockDepth;
     public float SeaLevel;
+    public float SnowLevel;
 }
 
 // 2. A managed component to safely hold the Unity Material reference
@@ -52,6 +53,7 @@ public class VoxelWorldAuthoring : MonoBehaviour
     
     [Header("World Limits")]
     public float SeaLevel = 25f; // Positioned comfortably within the 64-unit vertical space
+    public float SnowLevel = 50f;
     public float MaxSkyHeight = 60f;
     public float MaxBedrockDepth = 2f;
    
@@ -81,7 +83,8 @@ public class VoxelWorldAuthoring : MonoBehaviour
                 TrenchDepth = authoring.TrenchDepth,
                 MaxSkyHeight = authoring.MaxSkyHeight,
                 MaxBedrockDepth = authoring.MaxBedrockDepth,
-                SeaLevel = authoring.SeaLevel
+                SeaLevel = authoring.SeaLevel,
+                SnowLevel = authoring.SnowLevel
             });
 
             // Add the managed material component so our chunk generation system can access it

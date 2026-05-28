@@ -9,7 +9,10 @@ public struct MarchingCubesJob : IJob
     [ReadOnly] public NativeArray<VoxelDataElement> VoxelData;
     
     public int3 ChunkSize;
+    public float3 ChunkWorldPosition;
     public float IsoLevel;
+    public float SeaLevel;
+    public float SnowLevel;
 
     public NativeList<float3> Vertices;
     public NativeList<ushort> Indices;
@@ -137,27 +140,43 @@ public struct MarchingCubesJob : IJob
         return p1 + mu * (p2 - p1);
     }
 
-    private ushort GetMaterialAt(int3 p)
-    {
-        int3 pSize = ChunkSize + 1;
-        p = math.clamp(p, 0, pSize - 1);
-        int flatIndex = p.x + (p.y * pSize.x) + (p.z * pSize.x * pSize.y);
-        return VoxelData[flatIndex].GetMaterialID();
-    }
-
     private void AddVertex(float3 pos, float3 normal)
     {
         Indices.Add((ushort)Vertices.Length);
         Vertices.Add(pos);
         Normals.Add(normal);
         UVs.Add(new float2(pos.x, pos.z));
-        int3 voxelPos = (int3)math.round(pos);
-        ushort matId = GetMaterialAt(voxelPos);
-        float4 color = new float4(1.0f, 1.0f, 1.0f, 1.0f);
-        if (matId == 1) color = new float4(0.27f, 0.62f, 0.18f, 1.0f);
-        else if (matId == 2) color = new float4(0.5f, 0.5f, 0.5f, 1.0f);
-        else if (matId == 3) color = new float4(0.9f, 0.1f, 0.1f, 1.0f);
-        Colors.Add(color);
+        
+        // --- Automatic Texturing ---
+        // float4 grassColor = new float4(0.27f, 0.62f, 0.18f, 1.0f);
+        // float4 rockColor = new float4(0.4f, 0.4f, 0.4f, 1.0f);
+        // float4 sandColor = new float4(0.86f, 0.8f, 0.58f, 1.0f);
+
+        // Use Red for Grass, Green for Rock, Blue for Sand
+        float4 grassMask = new float4(1.0f, 0.0f, 0.0f, 1.0f);
+        float4 rockMask = new float4(0.0f, 1.0f, 0.0f, 1.0f);
+        float4 sandMask = new float4(0.0f, 0.0f, 1.0f, 1.0f);
+        
+        // // 1. Slope Blending (Grass vs Rock)
+        // float slope = math.dot(normal, new float3(0, 1, 0));
+        // // If slope > 0.8 it's flat grass. If < 0.5 it's steep rock.
+        // float slopeBlend = math.smoothstep(0.5f, 0.8f, slope);
+        // float4 baseColor = math.lerp(rockColor, grassColor, slopeBlend);
+
+        // 1. Slope Blending (Rock vs Grass)
+float slope = math.dot(normal, new float3(0, 1, 0));
+float baseBlend = math.smoothstep(0.5f, 0.8f, slope);
+float4 baseMask = math.lerp(rockMask, grassMask, baseBlend);
+
+        // 2. Height Blending (Sand)
+        // Only apply sand if the terrain is relatively flat and near SeaLevel
+        float worldPosY = pos.y + ChunkWorldPosition.y;
+        float flatMask = math.smoothstep(0.7f, 0.9f, slope);
+        float sandBlend = (1.0f - math.smoothstep(SeaLevel, SeaLevel + 2.0f, worldPosY)) * flatMask;
+        float4 finalMask = math.lerp(baseMask, sandMask, sandBlend);
+        
+        // Colors.Add(finalColor);
+        Colors.Add(finalMask);
     }
 }
 

@@ -118,7 +118,7 @@ public partial class ChunkGenerationSystem : SystemBase
         // We collect chunks that need setup to avoid structural changes while querying
         var chunksToInitialize = new System.Collections.Generic.List<(Entity entity, Mesh mesh, UnityEngine.Material mat, BlobAssetReference<Unity.Physics.Collider> collider)>();
 
-        foreach (var (settings, voxelBuffer, entity) in SystemAPI.Query<RefRO<VoxelWorldSettings>, DynamicBuffer<VoxelDataElement>>().WithAll<ChunkNeedsMeshingTag>().WithEntityAccess())
+        foreach (var (settings, coord, voxelBuffer, entity) in SystemAPI.Query<RefRO<VoxelWorldSettings>, RefRO<ChunkCoordinate>, DynamicBuffer<VoxelDataElement>>().WithAll<ChunkNeedsMeshingTag>().WithEntityAccess())
         {
             vertices.Clear();
             indices.Clear();
@@ -130,7 +130,10 @@ public partial class ChunkGenerationSystem : SystemBase
             {
                 VoxelData = voxelBuffer.AsNativeArray(),
                 ChunkSize = settings.ValueRO.ChunkSize,
+                ChunkWorldPosition = new float3(coord.ValueRO.Value.x * settings.ValueRO.ChunkSize.x, coord.ValueRO.Value.y * settings.ValueRO.ChunkSize.y, coord.ValueRO.Value.z * settings.ValueRO.ChunkSize.z),
                 IsoLevel = settings.ValueRO.IsoLevel,
+                SeaLevel = settings.ValueRO.SeaLevel,
+                SnowLevel = settings.ValueRO.SnowLevel,
                 Vertices = vertices,
                 Indices = indices,
                 Normals = normals,

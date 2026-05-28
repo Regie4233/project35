@@ -122,23 +122,12 @@ public struct NoiseGenerationJob : IJobParallelFor
         // Solid check against IsoLevel
         bool isSolid = finalDensityByte > (IsoLevel * 255);
         
-        // Material assignment
-        ushort materialId = 0;
-        if (isSolid)
-        {
-            if (worldPos.y < SeaLevel - 3)
-            {
-                materialId = 2; // Stone
-            }
-            else
-            {
-                materialId = 1; // Dirt/Grass
-            }
-        }
-        
         // Pack data
         uint packedData = finalDensityByte;
-        packedData |= (uint)(materialId << 8);
+        
+        // We no longer assign material IDs per voxel because MarchingCubesJob 
+        // applies textures mathematically using the surface Normal and Height!
+        
         if (isSolid)
         {
             packedData |= (1u << 24); // Flag bit 24 as Solid
