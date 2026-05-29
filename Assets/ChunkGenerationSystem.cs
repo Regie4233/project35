@@ -45,42 +45,45 @@ public partial class ChunkGenerationSystem : SystemBase
     {
         var ecb = new EntityCommandBuffer(Allocator.Temp);
 
-        // 1. Spawning
+        // 1. Spawning the Chunk Pool
         foreach (var (settings, entity) in SystemAPI.Query<RefRW<VoxelWorldSettings>>().WithNone<ChunkCoordinate>().WithEntityAccess())
         {
             // Randomize the noise offset if not already explicitly set to something large, or just always randomize it so it's different each time.
             settings.ValueRW.NoiseOffset = new float2(UnityEngine.Random.Range(-100000f, 100000f), UnityEngine.Random.Range(-100000f, 100000f));
             
-            // Only spawn if we haven't already marked this authoring entity
-            Debug.Log($"[ChunkGenerationSystem] Spawning grid {settings.ValueRO.GridSize.x}x{settings.ValueRO.GridSize.z} on entity {entity} with NoiseOffset {settings.ValueRO.NoiseOffset}...");
+            // Mark the authoring entity so we don't spawn again
+            ecb.AddComponent(entity, new ChunkCoordinate { Value = new int3(-999, -999, -999) });
             
-            for (int x = 0; x < settings.ValueRO.GridSize.x; x++)
+            int renderDist = settings.ValueRO.RenderDistance;
+            int chunksPerSide = (renderDist * 2) + 1;
+            int poolSize = chunksPerSide * chunksPerSide * settings.ValueRO.GridSize.y;
+            
+            // Add a small buffer of extra chunks just to be safe during fast movement
+            poolSize += settings.ValueRO.GridSize.y * 10;
+            
+            Debug.Log($"[ChunkGenerationSystem] Spawning chunk pool of {poolSize} entities...");
+            
+            for (int i = 0; i < poolSize; i++)
             {
-                for (int y = 0; y < settings.ValueRO.GridSize.y; y++)
-                {
-                    for (int z = 0; z < settings.ValueRO.GridSize.z; z++)
-                    {
-                        var chunkEntity = ecb.Instantiate(entity);
-                        ecb.AddComponent(chunkEntity, new ChunkCoordinate { Value = new int3(x, y, z) });
-                        ecb.AddComponent<ChunkNeedsNoiseTag>(chunkEntity);
-                        
-                        float3 pos = new float3(x * settings.ValueRO.ChunkSize.x, y * settings.ValueRO.ChunkSize.y, z * settings.ValueRO.ChunkSize.z);
-                        ecb.AddComponent(chunkEntity, LocalTransform.FromPosition(pos));
-                        ecb.AddComponent<LocalToWorld>(chunkEntity);
+                var chunkEntity = ecb.Instantiate(entity);
+                ecb.AddComponent(chunkEntity, new ChunkCoordinate { Value = new int3(-1, -1, -1) });
+                ecb.AddComponent(chunkEntity, LocalTransform.FromPosition(float3.zero));
+                ecb.AddComponent<LocalToWorld>(chunkEntity);
+                ecb.AddComponent<Disabled>(chunkEntity); // Start deactivated in the pool
 
-                        var buffer = ecb.AddBuffer<VoxelDataElement>(chunkEntity);
-                        int3 pSize = settings.ValueRO.ChunkSize + 5;
-                        buffer.ResizeUninitialized(pSize.x * pSize.y * pSize.z);
-                    }
-                }
+                var buffer = ecb.AddBuffer<VoxelDataElement>(chunkEntity);
+                int3 pSize = settings.ValueRO.ChunkSize + 5;
+                buffer.ResizeUninitialized(pSize.x * pSize.y * pSize.z);
             }
-            // Mark the authoring entity so it doesn't trigger spawning again
-            ecb.AddComponent(entity, new ChunkCoordinate { Value = new int3(-1) });
         }
 
         // 2. Noise Generation
-        foreach (var (settings, coord, voxelBuffer, entity) in SystemAPI.Query<RefRO<VoxelWorldSettings>, RefRO<ChunkCoordinate>, DynamicBuffer<VoxelDataElement>>().WithAll<ChunkNeedsNoiseTag>().WithEntityAccess())
+        int chunksProcessedThisFrame = 0;
+        foreach (var (settings, coord, voxelBuffer, entity) in SystemAPI.Query<RefRO<VoxelWorldSettings>, RefRO<ChunkCoordinate>, DynamicBuffer<VoxelDataElement>>().WithAll<ChunkNeedsNoiseTag>().WithOptions(EntityQueryOptions.IncludeDisabledEntities).WithEntityAccess())
         {
+            if (chunksProcessedThisFrame >= 1) break; // Stagger generation to prevent lag spikes!
+            chunksProcessedThisFrame++;
+
             var noiseJob = new NoiseGenerationJob
             {
                 ChunkSize = settings.ValueRO.ChunkSize,
@@ -122,8 +125,12 @@ public partial class ChunkGenerationSystem : SystemBase
         // We collect chunks that need setup to avoid structural changes while querying
         var chunksToInitialize = new System.Collections.Generic.List<(Entity entity, Mesh mesh, UnityEngine.Material mat, BlobAssetReference<Unity.Physics.Collider> collider)>();
 
-        foreach (var (settings, coord, voxelBuffer, entity) in SystemAPI.Query<RefRO<VoxelWorldSettings>, RefRO<ChunkCoordinate>, DynamicBuffer<VoxelDataElement>>().WithAll<ChunkNeedsMeshingTag>().WithEntityAccess())
+        int meshedThisFrame = 0;
+        foreach (var (settings, coord, voxelBuffer, entity) in SystemAPI.Query<RefRO<VoxelWorldSettings>, RefRO<ChunkCoordinate>, DynamicBuffer<VoxelDataElement>>().WithAll<ChunkNeedsMeshingTag>().WithOptions(EntityQueryOptions.IncludeDisabledEntities).WithEntityAccess())
         {
+            if (meshedThisFrame >= 1) break; // Stagger meshing to prevent lag spikes!
+            meshedThisFrame++;
+
             vertices.Clear();
             indices.Clear();
             normals.Clear();
@@ -149,6 +156,19 @@ public partial class ChunkGenerationSystem : SystemBase
 
             meshingJob.Execute();
 
+            var materialComp = EntityManager.GetComponentObject<VoxelMaterialComponent>(entity);
+            UnityEngine.Material mat = materialComp.Material;
+            if (mat == null)
+            {
+                if (fallbackMaterial == null)
+                {
+                    Shader shader = Shader.Find("Custom/VoxelVertexColor");
+                    if (shader == null) shader = Shader.Find("Universal Render Pipeline/Lit");
+                    if (shader != null) fallbackMaterial = new UnityEngine.Material(shader);
+                }
+                mat = fallbackMaterial;
+            }
+
             if (vertices.Length > 0)
             {
                 var mesh = new Mesh();
@@ -158,19 +178,6 @@ public partial class ChunkGenerationSystem : SystemBase
                 mesh.SetUVs(0, uvs.AsArray());
                 mesh.SetColors(colors.AsArray());
                 mesh.RecalculateBounds();
-
-                var materialComp = EntityManager.GetComponentObject<VoxelMaterialComponent>(entity);
-                UnityEngine.Material mat = materialComp.Material;
-                if (mat == null)
-                {
-                    if (fallbackMaterial == null)
-                    {
-                        Shader shader = Shader.Find("Custom/VoxelVertexColor");
-                        if (shader == null) shader = Shader.Find("Universal Render Pipeline/Lit");
-                        if (shader != null) fallbackMaterial = new UnityEngine.Material(shader);
-                    }
-                    mat = fallbackMaterial;
-                }
 
                 int numTriangles = indices.Length / 3;
                 var triangleIndices = new NativeArray<int3>(numTriangles * 2, Allocator.Temp);
@@ -194,9 +201,16 @@ public partial class ChunkGenerationSystem : SystemBase
                     Debug.Log($"[ChunkGenerationSystem] Chunk at {EntityManager.GetComponentData<LocalTransform>(entity).Position} generated {vertices.Length} vertices and {indices.Length/3} triangles.");
                 }
             }
+            else
+            {
+                // The chunk is empty, but we MUST assign an empty mesh to overwrite the old mountain mesh from the pool!
+                Mesh emptyMesh = new Mesh();
+                chunksToInitialize.Add((entity, emptyMesh, mat, default));
+            }
 
             ecb.RemoveComponent<ChunkNeedsMeshingTag>(entity);
             ecb.AddComponent<ChunkReadyTag>(entity);
+            ecb.RemoveComponent<Disabled>(entity); // Finally, make the chunk visible!
         }
 
         // Apply structural changes outside the query loop

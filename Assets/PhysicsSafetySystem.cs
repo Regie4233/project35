@@ -24,33 +24,18 @@ public partial struct PhysicsSafetySystem : ISystem
         if ((state.World.Flags & (WorldFlags.Conversion | WorldFlags.Shadow)) != 0)
             return;
 
-        int expectedChunks = 0;
-        int worldCount = 0;
-        foreach (var settings in SystemAPI.Query<RefRO<VoxelWorldSettings>>().WithNone<ChunkCoordinate>())
-        {
-            expectedChunks += settings.ValueRO.GridSize.x * settings.ValueRO.GridSize.y * settings.ValueRO.GridSize.z;
-            worldCount++;
-        }
-        foreach (var (settings, coord) in SystemAPI.Query<RefRO<VoxelWorldSettings>, RefRO<ChunkCoordinate>>())
-        {
-            if (coord.ValueRO.Value.x == -1)
-            {
-                expectedChunks += settings.ValueRO.GridSize.x * settings.ValueRO.GridSize.y * settings.ValueRO.GridSize.z;
-                worldCount++;
-            }
-        }
-
+        // Instead of calculating a static grid size (which is broken by streaming),
+        // we just wait until the generation pipeline is completely empty and we have at least some ready chunks!
+        int generatingCount = state.EntityManager.CreateEntityQuery(typeof(ChunkNeedsNoiseTag)).CalculateEntityCount() + 
+                              state.EntityManager.CreateEntityQuery(typeof(ChunkNeedsMeshingTag)).CalculateEntityCount();
+        
         int readyCount = _chunkQuery.CalculateEntityCount();
-        bool terrainReady = expectedChunks > 0 && readyCount >= expectedChunks;
+        bool terrainReady = readyCount > 0 && generatingCount == 0;
 
         if (terrainReady && !_hasReleased)
         {
-            Debug.Log($"[PhysicsSafetySystem] All Terrains ({worldCount} worlds) are Ready ({readyCount}/{expectedChunks} chunks). Releasing physics objects.");
+            Debug.Log($"[PhysicsSafetySystem] Terrain initial streaming complete! ({readyCount} chunks). Releasing physics objects.");
             _hasReleased = true;
-        }
-        else if (!terrainReady && _hasReleased)
-        {
-            _hasReleased = false;
         }
 
         var ecb = new EntityCommandBuffer(Allocator.Temp);

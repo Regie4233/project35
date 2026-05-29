@@ -29,19 +29,8 @@ public struct NoiseGenerationJob : IJobParallelFor
 
     public NativeArray<VoxelDataElement> VoxelData;
 
-    public void Execute(int index)
+    public float EvaluateDensity(float3 worldPos)
     {
-        // Use padded dimensions for indexing
-        int3 pSize = ChunkSize + 5;
-        
-        // Unflatten the 1D index back into 3D local coordinates
-        int x = index % pSize.x;
-        int y = (index / pSize.x) % pSize.y;
-        int z = index / (pSize.x * pSize.y);
-
-        // Offset the 3D local coordinates by -2 to center the padding around the 0-16 chunk bounds
-        float3 worldPos = ChunkWorldPosition + new float3(x - 2, y - 2, z - 2);
-        
         // A. Domain Warping for Coastal Islands
         float warpX = worldPos.x + noise.cnoise(new float2(worldPos.x + NoiseOffset.x, worldPos.z) * WarpScale) * WarpIntensity;
         float warpZ = worldPos.z + noise.cnoise(new float2(worldPos.x, worldPos.z + NoiseOffset.y) * WarpScale) * WarpIntensity;
@@ -58,7 +47,13 @@ public struct NoiseGenerationJob : IJobParallelFor
             // Ocean: deepen it based on how far out to sea we are
             density += continentalness * 20.0f;
             
-
+            // D. Trenches (Only in deep ocean)
+            float trenchNoise = noise.cnoise(new float2(worldPos.x + NoiseOffset.x, worldPos.z + NoiseOffset.y) * TrenchScale);
+            float trenchMask = 1.0f - math.saturate(math.abs(trenchNoise) * TrenchWidth);
+            
+            // Trenches get deeper the further out to sea we are
+            float deepOceanMask = math.smoothstep(-0.2f, -0.8f, continentalness);
+            density -= trenchMask * TrenchDepth * deepOceanMask;
         }
         else
         {
@@ -113,6 +108,24 @@ public struct NoiseGenerationJob : IJobParallelFor
         // Hard Vertical Limits
         if (worldPos.y > MaxSkyHeight) density -= 1000.0f;
         if (worldPos.y < MaxBedrockDepth) density += 1000.0f;
+
+        return density;
+    }
+
+    public void Execute(int index)
+    {
+        // Use padded dimensions for indexing
+        int3 pSize = ChunkSize + 5;
+        
+        // Unflatten the 1D index back into 3D local coordinates
+        int x = index % pSize.x;
+        int y = (index / pSize.x) % pSize.y;
+        int z = index / (pSize.x * pSize.y);
+
+        // Offset the 3D local coordinates by -2 to center the padding around the 0-16 chunk bounds
+        float3 worldPos = ChunkWorldPosition + new float3(x - 2, y - 2, z - 2);
+        
+        float density = EvaluateDensity(worldPos);
 
         // Normalize density to roughly -1 to 1 for byte mapping (10 units = 1 normalized unit)
         float normalizedDensity = math.clamp(density / 10f, -1f, 1f);

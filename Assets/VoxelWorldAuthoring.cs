@@ -7,6 +7,7 @@ public struct VoxelWorldSettings : IComponentData
 {
     public int3 ChunkSize;
     public int3 GridSize;
+    public int RenderDistance;
     public float NoiseScale;
     public float IsoLevel;
     public float2 NoiseOffset;
@@ -43,7 +44,8 @@ public class VoxelWorldAuthoring : MonoBehaviour
 {
    
     public Vector3Int ChunkSize = new Vector3Int(16, 16, 16);
-    public Vector3Int GridSize = new Vector3Int(5, 4, 5); // Increased Y to 4 to allow 64 units of height
+    public Vector3Int GridSize = new Vector3Int(64, 4, 64); 
+    public int RenderDistance = 3;
     
     [Header("Base Settings")]
     public float NoiseScale = 0.05f;
@@ -87,6 +89,7 @@ public class VoxelWorldAuthoring : MonoBehaviour
             {
                 ChunkSize = new int3(authoring.ChunkSize.x, authoring.ChunkSize.y, authoring.ChunkSize.z),
                 GridSize = new int3(authoring.GridSize.x, authoring.GridSize.y, authoring.GridSize.z),
+                RenderDistance = authoring.RenderDistance,
                 NoiseScale = authoring.NoiseScale,
                 IsoLevel = authoring.IsoLevel,
                 ContinentScale = authoring.ContinentScale,
