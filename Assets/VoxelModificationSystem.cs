@@ -16,19 +16,20 @@ public partial struct VoxelModificationSystem : ISystem
         {
             var voxelBuffer = item.Item1;
             var entity = item.Item2;
-            // Example: Player destroys the block at local index 512
-            int targetIndex = 512; 
+            // CSG Subtraction: math.max(terrainSDF, -shapeSDF)
+            // Example: digging a hole (shapeSDF = sphere)
+            float shapeSDF = -1.0f; // a sphere of radius 1 at this exact voxel point
             
             var voxel = voxelBuffer[targetIndex];
             if (voxel.IsSolid())
             {
-                // Convert to Air
-                voxel.Value = 0; 
+                // Smooth CSG Subtract
+                voxel.SDF = math.max(voxel.SDF, -shapeSDF);
                 
-                // Note: DynamicBuffer elements are value types. We must write the copy back to the buffer.
+                // Write back to buffer
                 voxelBuffer[targetIndex] = voxel; 
 
-                // Trigger a re-mesh tag component so the meshing system knows to rebuild
+                // Trigger remesh
                 ecb.AddComponent<ChunkNeedsRemeshTag>(entity);
             }
         }

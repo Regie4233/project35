@@ -8,6 +8,8 @@ public struct VoxelWorldSettings : IComponentData
     public int3 ChunkSize;
     public float NoiseScale;
     public float IsoLevel;
+    public int MaxLODDepth;
+    public float LODDistanceMultiplier;
 }
 
 // 2. A managed component to safely hold the Unity Material reference
@@ -24,7 +26,9 @@ public class VoxelWorldAuthoring : MonoBehaviour
     public float NoiseScale = 0.05f;
     public float IsoLevel = 0.5f;
     
-   
+    public int MaxLODDepth = 4;
+    public float LODDistanceMultiplier = 2.0f;
+    
     public Material ChunkMaterial;
 
     // 4. The Baker (Runs automatically to convert the MonoBehaviour into ECS components)
@@ -40,7 +44,9 @@ public class VoxelWorldAuthoring : MonoBehaviour
             {
                 ChunkSize = new int3(authoring.ChunkSize.x, authoring.ChunkSize.y, authoring.ChunkSize.z),
                 NoiseScale = authoring.NoiseScale,
-                IsoLevel = authoring.IsoLevel
+                IsoLevel = authoring.IsoLevel,
+                MaxLODDepth = authoring.MaxLODDepth,
+                LODDistanceMultiplier = authoring.LODDistanceMultiplier
             });
 
             // Add the managed material component so our chunk generation system can access it
