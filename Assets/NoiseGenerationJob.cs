@@ -3,26 +3,19 @@ using Unity.Collections;
 using Unity.Jobs;
 using Unity.Mathematics;
 
-
+[BurstCompile]
 public struct NoiseGenerationJob : IJobParallelFor
 {
     public int3 ChunkSize;
     public float3 ChunkWorldPosition;
-    public float NoiseScale; // Base scale (kept for legacy/base use if needed)
+    public float NoiseScale; // Used to scale world coordinates to heightmap coordinates
     public float IsoLevel;
-    public float2 NoiseOffset;
     
-    public float ContinentScale;
-    public float WarpScale;
-    public float WarpIntensity;
-    public float MountainScale;
-    public float MountainHeight;
-    public int Octaves;
-    public float Persistence;
-    public float Lacunarity;
-    public float TrenchScale;
-    public float TrenchDepth;
-    public float TrenchWidth;
+    // Diffusion Map Data
+    [ReadOnly] public NativeArray<float> Heightmap;
+    public int HeightmapResolution;
+    public float HeightScale;
+
     public float MaxSkyHeight;
     public float MaxBedrockDepth;
     public float SeaLevel;
@@ -39,82 +32,53 @@ public struct NoiseGenerationJob : IJobParallelFor
         int y = (index / pSize.x) % pSize.y;
         int z = index / (pSize.x * pSize.y);
 
-        // Offset the 3D local coordinates by -2 to center the padding around the 0-16 chunk bounds
+        // Offset the 3D local coordinates by -2 to center the padding
         float3 worldPos = ChunkWorldPosition + new float3(x - 2, y - 2, z - 2);
         
-        // A. Domain Warping for Coastal Islands
-        float warpX = worldPos.x + noise.cnoise(new float2(worldPos.x + NoiseOffset.x, worldPos.z) * WarpScale) * WarpIntensity;
-        float warpZ = worldPos.z + noise.cnoise(new float2(worldPos.x, worldPos.z + NoiseOffset.y) * WarpScale) * WarpIntensity;
+        // 1. Map world position to Heightmap UV (0 to 1)
+        // We use NoiseScale to control how much of the world the heightmap covers
+        float u = (worldPos.x * NoiseScale);
+        float v = (worldPos.z * NoiseScale);
 
-        // B. Continentalness (from approx -1 to 1)
-        float continentalness = noise.cnoise(new float2(warpX, warpZ) * ContinentScale);
-        
-        // Start with a density based on height vs SeaLevel
-        float density = (SeaLevel - worldPos.y);
-        
-        // C. Shaping the Continents (Spline-like blending)
-        if (continentalness < 0.0f)
-        {
-            // Ocean: deepen it based on how far out to sea we are
-            density += continentalness * 20.0f;
-            
+        // Map UV to pixel coordinates
+        float px = (u * HeightmapResolution);
+        float py = (v * HeightmapResolution);
 
-        }
-        else
-        {
-            // Land: Smooth Beaches and Stepped Cliffs
-            // By starting the smoothstep at 0.05 instead of 0.0, we force a wider, perfectly flat beach 
-            // before the inland plains start to rise.
-            float inlandFactor = math.smoothstep(0.05f, 0.8f, continentalness);
-            density += inlandFactor * 15.0f; // Gentle rise for inland plains
-            
-            // E. Meso Topography (Hills & Mountains, Only on Land)
-            // General rolling hills for all inland areas (Blended in smoothly so no sudden cliffs)
-            float hillNoise = noise.cnoise(new float2(worldPos.x + NoiseOffset.x, worldPos.z + NoiseOffset.y) * (MountainScale * 0.5f));
-            float hillBlend = math.smoothstep(0.1f, 0.4f, continentalness);
-            density += hillNoise * 5.0f * hillBlend;
-            
-            // Create a mountain mask so mountains only spawn in specific "mountain ranges"
-            float mountainMask = noise.cnoise(new float2(worldPos.x + NoiseOffset.x, worldPos.z + NoiseOffset.y) * (ContinentScale * 2.0f));
-            
-            // Add sharp mountains only if we are significantly inland AND the mountain mask is high
-            if (continentalness > 0.3f && mountainMask > 0.1f)
-            {
-                float2 pos = new float2(worldPos.x + NoiseOffset.x, worldPos.z + NoiseOffset.y) * MountainScale;
-                
-                float total = 0f;
-                float frequency = 1f;
-                float amplitude = 1f;
-                float maxValue = 0f;
+        // Clamp to avoid out of bounds
+        px = math.clamp(px, 0, HeightmapResolution - 1.001f);
+        py = math.clamp(py, 0, HeightmapResolution - 1.001f);
 
-                for (int i = 0; i < Octaves; i++)
-                {
-                    // noise.cnoise returns -1 to 1.
-                    // We use 1.0f - math.abs to create "ridges" (sharp peaks, wide valleys)
-                    float n = 1.0f - math.abs(noise.cnoise(pos * frequency));
-                    n *= n; // Square it for sharper peaks
-                    total += n * amplitude;
-                    maxValue += amplitude;
-                    
-                    amplitude *= Persistence;
-                    frequency *= Lacunarity;
-                }
+        int x0 = (int)math.floor(px);
+        int x1 = x0 + 1;
+        int y0 = (int)math.floor(py);
+        int y1 = y0 + 1;
 
-                float fbmHeight = (total / maxValue) * MountainHeight;
-                
-                // Smoothly blend the mountains in based on the mask and how far inland we are
-                float maskBlend = math.smoothstep(0.1f, 0.4f, mountainMask);
-                float continentalBlend = math.smoothstep(0.3f, 0.6f, continentalness);
-                
-                density += fbmHeight * maskBlend * continentalBlend;
-            }
-        }
+        float tx = px - x0;
+        float ty = py - y0;
+
+        // 2. Bilinear Interpolation from the 1D NativeArray
+        float h00 = Heightmap[y0 * HeightmapResolution + x0];
+        float h10 = Heightmap[y0 * HeightmapResolution + x1];
+        float h01 = Heightmap[y1 * HeightmapResolution + x0];
+        float h11 = Heightmap[y1 * HeightmapResolution + x1];
+
+        float h0 = math.lerp(h00, h10, tx);
+        float h1 = math.lerp(h01, h11, tx);
+        float heightmapValue = math.lerp(h0, h1, ty);
+
+        // 3. Convert heightmap value (-1 to 1) to world height
+        float targetTerrainHeight = SeaLevel + (heightmapValue * HeightScale);
+
+        // 4. Calculate Density for Marching Cubes
+        // Positive density = solid, Negative = air
+        float density = targetTerrainHeight - worldPos.y;
 
         // Hard Vertical Limits
         if (worldPos.y > MaxSkyHeight) density -= 1000.0f;
         if (worldPos.y < MaxBedrockDepth) density += 1000.0f;
 
         // Normalize density to roughly -1 to 1 for byte mapping (10 units = 1 normalized unit)
+        // This ensures the transition is smooth across voxels, preventing blocky terrain
         float normalizedDensity = math.clamp(density / 10f, -1f, 1f);
 
         // Convert the noise float to a 0-255 density byte
@@ -123,17 +87,10 @@ public struct NoiseGenerationJob : IJobParallelFor
         // Solid check against IsoLevel
         bool isSolid = finalDensityByte > (IsoLevel * 255);
         
-        // Pack data
         uint packedData = finalDensityByte;
-        
-        // We no longer assign material IDs per voxel because MarchingCubesJob 
-        // applies textures mathematically using the surface Normal and Height!
-        
-        if (isSolid)
-        {
-            packedData |= (1u << 24); // Flag bit 24 as Solid
-        }
+        if (isSolid) packedData |= (1u << 24);
 
         VoxelData[index] = new VoxelDataElement { Value = packedData };
     }
 }
+

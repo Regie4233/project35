@@ -43,6 +43,11 @@ public partial class ChunkGenerationSystem : SystemBase
 
     protected override void OnUpdate()
     {
+        if (!SystemAPI.TryGetSingleton<TerrainHeightmapData>(out var heightmapData) || !heightmapData.IsReady)
+        {
+            return;
+        }
+
         var ecb = new EntityCommandBuffer(Allocator.Temp);
 
         // 1. Spawning
@@ -87,21 +92,12 @@ public partial class ChunkGenerationSystem : SystemBase
                 ChunkWorldPosition = new float3(coord.ValueRO.Value.x * settings.ValueRO.ChunkSize.x, coord.ValueRO.Value.y * settings.ValueRO.ChunkSize.y, coord.ValueRO.Value.z * settings.ValueRO.ChunkSize.z),
                 NoiseScale = settings.ValueRO.NoiseScale,
                 IsoLevel = settings.ValueRO.IsoLevel,
-                NoiseOffset = settings.ValueRO.NoiseOffset,
-                ContinentScale = settings.ValueRO.ContinentScale,
-                WarpScale = settings.ValueRO.WarpScale,
-                WarpIntensity = settings.ValueRO.WarpIntensity,
-                MountainScale = settings.ValueRO.MountainScale,
-                MountainHeight = settings.ValueRO.MountainHeight,
-                Octaves = settings.ValueRO.Octaves,
-                Persistence = settings.ValueRO.Persistence,
-                Lacunarity = settings.ValueRO.Lacunarity,
-                TrenchScale = settings.ValueRO.TrenchScale,
-                TrenchDepth = settings.ValueRO.TrenchDepth,
-                TrenchWidth = settings.ValueRO.TrenchWidth,
                 MaxSkyHeight = settings.ValueRO.MaxSkyHeight,
                 MaxBedrockDepth = settings.ValueRO.MaxBedrockDepth,
                 SeaLevel = settings.ValueRO.SeaLevel,
+                Heightmap = heightmapData.Heightmap,
+                HeightmapResolution = heightmapData.Resolution,
+                HeightScale = 64f, // Scale value based on max height variance
                 VoxelData = voxelBuffer.AsNativeArray()
             };
 
