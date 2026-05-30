@@ -94,3 +94,7 @@ crashlytics-build.properties
 Icon?
 ehthumbs.db
 Thumbs.db
+
+# Ignore large machine learning models and documents
+*.onnx
+*.pdf
