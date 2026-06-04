@@ -99,6 +99,7 @@ public partial class ChunkGenerationSystem : SystemBase
                 Heightmap = heightmapData.Heightmap,
                 HeightmapResolution = heightmapData.Resolution,
                 HeightScale = heightmapData.HeightScale, // Read from the SentisHeightmapGenerator
+                MapOffset = heightmapData.MapOffset,
                 VoxelData = voxelBuffer.AsNativeArray()
             };
 

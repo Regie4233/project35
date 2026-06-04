@@ -10,6 +10,7 @@ public struct TerrainHeightmapData : IComponentData
     public NativeArray<float> Heightmap;
     public int Resolution;
     public float HeightScale;
+    public float2 MapOffset;
     public bool IsReady;
 }
 
@@ -22,6 +23,9 @@ public class SentisHeightmapGenerator : MonoBehaviour
     [Header("Output Scale")]
     [Tooltip("Divisor for the heightmap values, to match the ChunkGenerationSystem scale")]
     public float HeightScale = 64f;
+
+    [Tooltip("Offset to pan around the map. Values from 0 to 1 represent the entire map.")]
+    public Vector2 MapOffset = Vector2.zero;
 
     private NativeArray<float> generatedHeightmap;
 
@@ -110,6 +114,7 @@ public class SentisHeightmapGenerator : MonoBehaviour
             Heightmap = generatedHeightmap,
             Resolution = resolution,
             HeightScale = HeightScale,
+            MapOffset = MapOffset,
             IsReady = true
         });
         

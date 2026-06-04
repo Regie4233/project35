@@ -15,6 +15,7 @@ public struct NoiseGenerationJob : IJobParallelFor
     [ReadOnly] public NativeArray<float> Heightmap;
     public int HeightmapResolution;
     public float HeightScale;
+    public float2 MapOffset;
 
     public float MaxSkyHeight;
     public float MaxBedrockDepth;
@@ -38,8 +39,8 @@ public struct NoiseGenerationJob : IJobParallelFor
         
         // 1. Map world position to Heightmap UV (0 to 1)
         // We use NoiseScale to control how much of the world the heightmap covers
-        float u = (worldPos.x * NoiseScale);
-        float v = (worldPos.z * NoiseScale);
+        float u = (worldPos.x * NoiseScale) + MapOffset.x;
+        float v = (worldPos.z * NoiseScale) + MapOffset.y;
 
         // Map UV to pixel coordinates
         float px = (u * HeightmapResolution);
