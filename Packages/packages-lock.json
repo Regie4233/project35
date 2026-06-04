@@ -269,6 +269,14 @@
       "dependencies": {},
       "url": "https://packages.unity.com"
     },
+    "com.unity.sentis": {
+      "version": "2.2.0",
+      "depth": 0,
+      "source": "builtin",
+      "dependencies": {
+        "com.unity.ai.inference": "2.2.1"
+      }
+    },
     "com.unity.serialization": {
       "version": "3.1.5",
       "depth": 2,

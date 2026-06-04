@@ -98,3 +98,10 @@ Thumbs.db
 # Ignore large machine learning models and documents
 *.onnx
 *.pdf
+
+# Python and AI Terrain Generator
+.venv/
+__pycache__/
+*.raw
+*.h5
+*.jpg

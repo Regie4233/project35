@@ -1,8 +1,8 @@
 using UnityEngine;
-using Unity.Sentis;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Mathematics;
+using System.IO;
 using System.Collections;
 
 public struct TerrainHeightmapData : IComponentData
@@ -14,112 +14,97 @@ public struct TerrainHeightmapData : IComponentData
 
 public class SentisHeightmapGenerator : MonoBehaviour
 {
-    [Header("Sentis ONNX Model")]
-    [Tooltip("Drop your pre-trained terrain heightmap .onnx model here")]
-    public ModelAsset TerrainModelAsset;
-    
-    [Header("Heightmap Settings")]
-    [Tooltip("The resolution of the generated heightmap (e.g. 512)")]
-    public int HeightmapResolution = 512;
+    [Header("Pre-generated Map Loader")]
+    [Tooltip("The name of the .raw file inside the StreamingAssets folder")]
+    public string RawFileName = "world_map.raw";
     
     [Header("Output Scale")]
-    [Tooltip("Multiplier for the normalized heightmap values")]
+    [Tooltip("Divisor for the heightmap values, to match the ChunkGenerationSystem scale")]
     public float HeightScale = 64f;
 
     private NativeArray<float> generatedHeightmap;
-    private bool isFinished = false;
-
-    // Sentis runtime resources
-    private Model runtimeModel;
-    private IWorker worker;
 
     void Start()
     {
-        StartCoroutine(GenerateTerrainRoutine());
+        StartCoroutine(LoadTerrainRoutine());
     }
 
-    IEnumerator GenerateTerrainRoutine()
+    IEnumerator LoadTerrainRoutine()
     {
-        generatedHeightmap = new NativeArray<float>(HeightmapResolution * HeightmapResolution, Allocator.Persistent);
-
-        if (TerrainModelAsset != null)
+        string filePath = Path.Combine(Application.streamingAssetsPath, RawFileName);
+        int calculatedResolution = 0;
+        
+        if (File.Exists(filePath))
         {
-            Debug.Log("[SentisHeightmapGenerator] Loading ONNX model...");
+            byte[] fileData = File.ReadAllBytes(filePath);
             
-            // 1. Load the Model
-            runtimeModel = ModelLoader.Load(TerrainModelAsset);
+            // Dynamically calculate the resolution based on the file size to prevent striping/aliasing
+            int numFloats = fileData.Length / 4;
+            calculatedResolution = (int)math.sqrt(numFloats);
             
-            // 2. Create the Worker (Use GPU compute)
-            worker = WorkerFactory.CreateWorker(BackendType.GPUCompute, runtimeModel);
-
-            // 3. Prepare Inputs
-            // For a diffusion/generator model, this might be a random latent noise tensor.
-            // Example: [batch_size, channels, height, width]
-            using var inputTensor = new TensorFloat(new TensorShape(1, 4, 64, 64)); 
-            
-            // Fill with random noise (standard normal distribution for diffusion)
-            var inputSpan = inputTensor.ToReadOnlyArray();
-            float[] noiseData = new float[inputSpan.Length];
-            for (int i = 0; i < noiseData.Length; i++)
+            if (calculatedResolution * calculatedResolution != numFloats)
             {
-                // Box-Muller transform for normal distribution
-                float u1 = UnityEngine.Random.value;
-                float u2 = UnityEngine.Random.value;
-                noiseData[i] = Mathf.Sqrt(-2f * Mathf.Log(Mathf.Max(u1, 0.0001f))) * Mathf.Cos(2f * Mathf.PI * u2);
+                Debug.LogError($"[StaticHeightmapLoader] The .raw file at {filePath} does not contain a perfect square of floats. Are you sure it's a valid heightmap?");
+                yield break;
             }
-            using var inputTensorWithData = new TensorFloat(inputTensor.shape, noiseData);
 
-            Debug.Log("[SentisHeightmapGenerator] Executing Model Inference...");
+            Debug.Log($"[StaticHeightmapLoader] Detected map resolution: {calculatedResolution}x{calculatedResolution} from file size.");
             
-            // 4. Execute the Model
-            worker.Execute(inputTensorWithData);
+            generatedHeightmap = new NativeArray<float>(numFloats, Allocator.Persistent);
             
-            // 5. Retrieve Output
-            // Assuming the model outputs a single-channel heightmap [1, 1, 512, 512]
-            var outputTensor = worker.PeekOutput() as TensorFloat;
-            
-            // 6. Copy to NativeArray for ECS to consume
-            var outputSpan = outputTensor.ToReadOnlyArray();
-            for(int i = 0; i < outputSpan.Length && i < generatedHeightmap.Length; i++)
+            // First pass: find min and max elevation
+            float minElev = float.MaxValue;
+            float maxElev = float.MinValue;
+            for (int i = 0; i < generatedHeightmap.Length; i++)
             {
-                generatedHeightmap[i] = outputSpan[i];
+                float elevation = System.BitConverter.ToSingle(fileData, i * 4);
+                if (elevation < minElev) minElev = elevation;
+                if (elevation > maxElev) maxElev = elevation;
             }
             
-            Debug.Log("[SentisHeightmapGenerator] Inference complete.");
+            Debug.Log($"[StaticHeightmapLoader] Raw elevation ranges from {minElev}m to {maxElev}m. Normalizing...");
+
+            // We load the flat float array and normalize it to [-1, 1]
+            for (int i = 0; i < generatedHeightmap.Length; i++)
+            {
+                float elevation = System.BitConverter.ToSingle(fileData, i * 4);
+                
+                // Normalize between -1 and 1
+                float normalized = -1f + 2f * ((elevation - minElev) / (maxElev - minElev));
+                
+                // The NoiseGenerationJob multiplies this normalized value by HeightScale.
+                generatedHeightmap[i] = normalized;
+            }
+            Debug.Log($"[StaticHeightmapLoader] Loaded {calculatedResolution}x{calculatedResolution} map successfully.");
         }
         else
         {
-            Debug.LogWarning("[SentisHeightmapGenerator] No ONNX Model assigned! Running MOCK pipeline to generate smooth hills.");
-            
-            // MOCK PIPELINE: Generate a smooth, realistic-looking procedural heightmap 
-            // so the rest of the systems can still function and be tested.
-            for (int y = 0; y < HeightmapResolution; y++)
-            {
-                for (int x = 0; x < HeightmapResolution; x++)
-                {
-                    float nx = (float)x / HeightmapResolution * 3f;
-                    float ny = (float)y / HeightmapResolution * 3f;
-                    
-                    // Simple smooth combination of sine waves and distance fields for a "island/hill" look
-                    float e = 0.5f * Mathf.PerlinNoise(nx, ny) 
-                            + 0.25f * Mathf.PerlinNoise(nx * 2, ny * 2) 
-                            + 0.125f * Mathf.PerlinNoise(nx * 4, ny * 4);
-                            
-                    // Normalize and scale to roughly -1 to 1 range
-                    float val = (e * 2f - 1f);
-                    generatedHeightmap[y * HeightmapResolution + x] = val;
-                }
-            }
-            yield return null; // simulate a frame of work
+            Debug.LogWarning($"[StaticHeightmapLoader] Map file not found at {filePath}. Running MOCK pipeline to generate smooth hills. Have you run the Python script yet?");
+            calculatedResolution = 256;
+            generatedHeightmap = new NativeArray<float>(calculatedResolution * calculatedResolution, Allocator.Persistent);
+            FillMockData(calculatedResolution);
         }
 
-        isFinished = true;
-
-        // Register the data into ECS
-        RegisterToECS();
+        RegisterToECS(calculatedResolution);
+        yield return null;
     }
 
-    private void RegisterToECS()
+    private void FillMockData(int resolution)
+    {
+        for (int y = 0; y < resolution; y++)
+        {
+            for (int x = 0; x < resolution; x++)
+            {
+                float u = x / (float)resolution;
+                float v = y / (float)resolution;
+                // Generate a simple hill shape
+                float height = math.sin(u * math.PI) * math.sin(v * math.PI);
+                generatedHeightmap[y * resolution + x] = height;
+            }
+        }
+    }
+
+    private void RegisterToECS(int resolution)
     {
         var entityManager = World.DefaultGameObjectInjectionWorld.EntityManager;
         var entity = entityManager.CreateEntity();
@@ -127,16 +112,15 @@ public class SentisHeightmapGenerator : MonoBehaviour
         entityManager.AddComponentData(entity, new TerrainHeightmapData
         {
             Heightmap = generatedHeightmap,
-            Resolution = HeightmapResolution,
+            Resolution = resolution,
             IsReady = true
         });
         
-        Debug.Log($"[SentisHeightmapGenerator] Registered heightmap {HeightmapResolution}x{HeightmapResolution} to ECS.");
+        Debug.Log($"[StaticHeightmapLoader] Registered heightmap {resolution}x{resolution} to ECS.");
     }
 
     void OnDestroy()
     {
-        worker?.Dispose();
         if (generatedHeightmap.IsCreated)
         {
             generatedHeightmap.Dispose();

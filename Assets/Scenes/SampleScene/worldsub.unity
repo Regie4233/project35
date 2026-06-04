@@ -392,23 +392,23 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::VoxelWorldAuthoring
   ChunkSize: {x: 16, y: 16, z: 16}
-  GridSize: {x: 10, y: 4, z: 10}
-  NoiseScale: 0.0150109995
+  GridSize: {x: 12, y: 64, z: 12}
+  NoiseScale: 0.00012207031
   IsoLevel: 0.5001
-  ContinentScale: 0.025
+  ContinentScale: 0.008
   WarpScale: 0.015
   WarpIntensity: 25
   MountainScale: 0.03
-  MountainHeight: 25
+  MountainHeight: 60
   Octaves: 4
   Persistence: 0.5
   Lacunarity: 2
   TrenchScale: 0.05
   TrenchDepth: 30
   TrenchWidth: 0.05
-  SeaLevel: 22
+  SeaLevel: 25
   SnowLevel: 50
-  MaxSkyHeight: 60
+  MaxSkyHeight: 500
   MaxBedrockDepth: 2
   ChunkMaterial: {fileID: 2100000, guid: 3b6c5a000314bcb47b5372e86d5bae56, type: 2}
 --- !u!4 &900852416
