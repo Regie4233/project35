@@ -98,7 +98,7 @@ public partial class ChunkGenerationSystem : SystemBase
                 ContinentScale = settings.ValueRO.ContinentScale,
                 Heightmap = heightmapData.Heightmap,
                 HeightmapResolution = heightmapData.Resolution,
-                HeightScale = 64f, // Scale value based on max height variance
+                HeightScale = heightmapData.HeightScale, // Read from the SentisHeightmapGenerator
                 VoxelData = voxelBuffer.AsNativeArray()
             };
 

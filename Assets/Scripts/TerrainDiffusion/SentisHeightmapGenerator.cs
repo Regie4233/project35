@@ -9,6 +9,7 @@ public struct TerrainHeightmapData : IComponentData
 {
     public NativeArray<float> Heightmap;
     public int Resolution;
+    public float HeightScale;
     public bool IsReady;
 }
 
@@ -62,18 +63,13 @@ public class SentisHeightmapGenerator : MonoBehaviour
                 if (elevation > maxElev) maxElev = elevation;
             }
             
-            Debug.Log($"[StaticHeightmapLoader] Raw elevation ranges from {minElev}m to {maxElev}m. Normalizing...");
+            Debug.Log($"[StaticHeightmapLoader] Raw elevation ranges from {minElev}m to {maxElev}m. Using absolute elevation values...");
 
-            // We load the flat float array and normalize it to [-1, 1]
+            // We load the flat float array directly
             for (int i = 0; i < generatedHeightmap.Length; i++)
             {
                 float elevation = System.BitConverter.ToSingle(fileData, i * 4);
-                
-                // Normalize between -1 and 1
-                float normalized = -1f + 2f * ((elevation - minElev) / (maxElev - minElev));
-                
-                // The NoiseGenerationJob multiplies this normalized value by HeightScale.
-                generatedHeightmap[i] = normalized;
+                generatedHeightmap[i] = elevation;
             }
             Debug.Log($"[StaticHeightmapLoader] Loaded {calculatedResolution}x{calculatedResolution} map successfully.");
         }
@@ -97,8 +93,8 @@ public class SentisHeightmapGenerator : MonoBehaviour
             {
                 float u = x / (float)resolution;
                 float v = y / (float)resolution;
-                // Generate a simple hill shape
-                float height = math.sin(u * math.PI) * math.sin(v * math.PI);
+                // Generate a simple hill shape with absolute real-world elevation scaling
+                float height = math.sin(u * math.PI) * math.sin(v * math.PI) * 1000f; // up to 1000m hills
                 generatedHeightmap[y * resolution + x] = height;
             }
         }
@@ -113,6 +109,7 @@ public class SentisHeightmapGenerator : MonoBehaviour
         {
             Heightmap = generatedHeightmap,
             Resolution = resolution,
+            HeightScale = HeightScale,
             IsReady = true
         });
         
