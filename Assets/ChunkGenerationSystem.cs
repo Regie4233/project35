@@ -15,13 +15,16 @@ public partial class ChunkGenerationSystem : SystemBase
     private NativeArray<int> edgeTable;
     private NativeArray<int> triTable;
     private NativeHashSet<BlobAssetReference<Unity.Physics.Collider>> activeColliders;
+    private NativeList<BlobAssetReference<Unity.Physics.Collider>> collidersToDispose;
+    private System.Collections.Generic.List<(Entity entity, Mesh mesh, UnityEngine.Material mat, BlobAssetReference<Unity.Physics.Collider> collider)> chunksToInitialize = new System.Collections.Generic.List<(Entity, Mesh, UnityEngine.Material, BlobAssetReference<Unity.Physics.Collider>)>();
     private UnityEngine.Material fallbackMaterial;
 
     protected override void OnCreate()
     {
         edgeTable = new NativeArray<int>(MarchingCubesTables.edgeTable, Allocator.Persistent);
         triTable = new NativeArray<int>(MarchingCubesTables.triTable, Allocator.Persistent);
-        activeColliders = new NativeHashSet<BlobAssetReference<Unity.Physics.Collider>>(256, Allocator.Persistent);
+        activeColliders = new NativeHashSet<BlobAssetReference<Unity.Physics.Collider>>(1024, Allocator.Persistent);
+        collidersToDispose = new NativeList<BlobAssetReference<Unity.Physics.Collider>>(1024, Allocator.Persistent);
         RequireForUpdate<VoxelWorldSettings>();
     }
 
@@ -31,24 +34,33 @@ public partial class ChunkGenerationSystem : SystemBase
         if (triTable.IsCreated) triTable.Dispose();
         if (fallbackMaterial != null) Object.DestroyImmediate(fallbackMaterial);
 
-        if (activeColliders.IsCreated)
+        foreach (var collider in activeColliders)
         {
-            foreach (var collider in activeColliders)
-            {
-                if (collider.IsCreated) collider.Dispose();
-            }
-            activeColliders.Dispose();
+            if (collider.IsCreated) collider.Dispose();
         }
+        activeColliders.Dispose();
+        
+        foreach (var collider in collidersToDispose)
+        {
+            if (collider.IsCreated) collider.Dispose();
+        }
+        collidersToDispose.Dispose();
     }
 
     protected override void OnUpdate()
     {
+        foreach (var collider in collidersToDispose)
+        {
+            if (collider.IsCreated) collider.Dispose();
+        }
+        collidersToDispose.Clear();
+
         if (!SystemAPI.TryGetSingleton<TerrainHeightmapData>(out var heightmapData) || !heightmapData.IsReady)
         {
             return;
         }
 
-        var ecb = new EntityCommandBuffer(Allocator.Temp);
+        var ecb1 = new EntityCommandBuffer(Allocator.Temp);
 
         // 1. Dynamic Chunk Loading / Spawning
         float3 viewerPos = float3.zero;
@@ -68,12 +80,8 @@ public partial class ChunkGenerationSystem : SystemBase
             var loadedChunks = new NativeHashSet<int3>(1024, Allocator.Temp);
             int chunksSpawnedThisFrame = 0;
 
-            // Despawn loop
             foreach (var (chunkCoord, chunkEntity) in SystemAPI.Query<RefRO<ChunkCoordinate>>().WithEntityAccess())
             {
-                // We don't despawn the authoring entity because it has no ChunkCoordinate. 
-                // Any entity with ChunkCoordinate is an active chunk.
-                
                 if (math.abs(chunkCoord.ValueRO.Value.x - viewerCoord.x) > renderDistance || 
                     math.abs(chunkCoord.ValueRO.Value.z - viewerCoord.z) > renderDistance)
                 {
@@ -83,7 +91,7 @@ public partial class ChunkGenerationSystem : SystemBase
                         if (collider.Value.IsCreated)
                         {
                             activeColliders.Remove(collider.Value);
-                            collider.Value.Dispose();
+                            collidersToDispose.Add(collider.Value);
                         }
                     }
                     
@@ -93,7 +101,7 @@ public partial class ChunkGenerationSystem : SystemBase
                         if (managedData.Mesh != null) UnityEngine.Object.Destroy(managedData.Mesh);
                     }
 
-                    ecb.DestroyEntity(chunkEntity);
+                    ecb1.DestroyEntity(chunkEntity);
                 }
                 else
                 {
@@ -101,7 +109,6 @@ public partial class ChunkGenerationSystem : SystemBase
                 }
             }
 
-            // Spawn missing chunks within render distance
             for (int x = -renderDistance; x <= renderDistance; x++)
             {
                 for (int z = -renderDistance; z <= renderDistance; z++)
@@ -112,15 +119,15 @@ public partial class ChunkGenerationSystem : SystemBase
 
                         if (!loadedChunks.Contains(targetCoord) && chunksSpawnedThisFrame < chunksPerFrame)
                         {
-                            var chunkEntity = ecb.Instantiate(authoringEntity);
-                            ecb.AddComponent(chunkEntity, new ChunkCoordinate { Value = targetCoord });
-                            ecb.AddComponent<ChunkNeedsNoiseTag>(chunkEntity);
+                            var chunkEntity = ecb1.Instantiate(authoringEntity);
+                            ecb1.AddComponent(chunkEntity, new ChunkCoordinate { Value = targetCoord });
+                            ecb1.AddComponent<ChunkNeedsNoiseTag>(chunkEntity);
                             
                             float3 pos = new float3(targetCoord.x * settings.ValueRO.ChunkSize.x, targetCoord.y * settings.ValueRO.ChunkSize.y, targetCoord.z * settings.ValueRO.ChunkSize.z);
-                            ecb.AddComponent(chunkEntity, LocalTransform.FromPosition(pos));
-                            ecb.AddComponent<LocalToWorld>(chunkEntity);
+                            ecb1.AddComponent(chunkEntity, LocalTransform.FromPosition(pos));
+                            ecb1.AddComponent<LocalToWorld>(chunkEntity);
 
-                            var buffer = ecb.AddBuffer<VoxelDataElement>(chunkEntity);
+                            var buffer = ecb1.AddBuffer<VoxelDataElement>(chunkEntity);
                             int3 pSize = settings.ValueRO.ChunkSize + 5;
                             buffer.ResizeUninitialized(pSize.x * pSize.y * pSize.z);
 
@@ -133,6 +140,11 @@ public partial class ChunkGenerationSystem : SystemBase
             
             loadedChunks.Dispose();
         }
+        
+        ecb1.Playback(EntityManager);
+        ecb1.Dispose();
+
+        var ecb2 = new EntityCommandBuffer(Allocator.Temp);
 
         // 2. Noise Generation
         foreach (var (settings, coord, voxelBuffer, entity) in SystemAPI.Query<RefRO<VoxelWorldSettings>, RefRO<ChunkCoordinate>, DynamicBuffer<VoxelDataElement>>().WithAll<ChunkNeedsNoiseTag>().WithEntityAccess())
@@ -149,7 +161,7 @@ public partial class ChunkGenerationSystem : SystemBase
                 ContinentScale = settings.ValueRO.ContinentScale,
                 Heightmap = heightmapData.Heightmap,
                 HeightmapResolution = heightmapData.Resolution,
-                HeightScale = heightmapData.HeightScale, // Read from the SentisHeightmapGenerator
+                HeightScale = heightmapData.HeightScale,
                 MapOffset = heightmapData.MapOffset,
                 VoxelData = voxelBuffer.AsNativeArray()
             };
@@ -157,9 +169,14 @@ public partial class ChunkGenerationSystem : SystemBase
             int3 pSize = settings.ValueRO.ChunkSize + 5;
             noiseJob.Schedule(pSize.x * pSize.y * pSize.z, 64).Complete();
 
-            ecb.RemoveComponent<ChunkNeedsNoiseTag>(entity);
-            ecb.AddComponent<ChunkNeedsMeshingTag>(entity);
+            ecb2.RemoveComponent<ChunkNeedsNoiseTag>(entity);
+            ecb2.AddComponent<ChunkNeedsMeshingTag>(entity);
         }
+        
+        ecb2.Playback(EntityManager);
+        ecb2.Dispose();
+
+        var ecb3 = new EntityCommandBuffer(Allocator.Temp);
 
         // 3. Meshing
         var vertices = new NativeList<float3>(Allocator.Temp);
@@ -167,9 +184,6 @@ public partial class ChunkGenerationSystem : SystemBase
         var normals = new NativeList<float3>(Allocator.Temp);
         var uvs = new NativeList<float2>(Allocator.Temp);
         var colors = new NativeList<float4>(Allocator.Temp);
-
-        // We collect chunks that need setup to avoid structural changes while querying
-        var chunksToInitialize = new System.Collections.Generic.List<(Entity entity, Mesh mesh, UnityEngine.Material mat, BlobAssetReference<Unity.Physics.Collider> collider)>();
 
         foreach (var (settings, coord, voxelBuffer, entity) in SystemAPI.Query<RefRO<VoxelWorldSettings>, RefRO<ChunkCoordinate>, DynamicBuffer<VoxelDataElement>>().WithAll<ChunkNeedsMeshingTag>().WithEntityAccess())
         {
@@ -222,11 +236,10 @@ public partial class ChunkGenerationSystem : SystemBase
                 }
 
                 int numTriangles = indices.Length / 3;
-                var triangleIndices = new NativeArray<int3>(numTriangles * 2, Allocator.Temp);
+                var triangleIndices = new NativeArray<int3>(numTriangles, Allocator.Temp);
                 for (int t = 0; t < indices.Length; t += 3) 
                 {
                     triangleIndices[t / 3] = new int3(indices[t], indices[t + 1], indices[t + 2]);
-                    triangleIndices[numTriangles + (t / 3)] = new int3(indices[t], indices[t + 2], indices[t + 1]);
                 }
                 
                 var meshCollider = Unity.Physics.MeshCollider.Create(
@@ -239,14 +252,14 @@ public partial class ChunkGenerationSystem : SystemBase
 
                 activeColliders.Add(meshCollider);
                 chunksToInitialize.Add((entity, mesh, mat, meshCollider));
-                if (math.distance(math.transform(EntityManager.GetComponentData<LocalToWorld>(entity).Value, mesh.bounds.center), new float3(80, 8, 80)) < 25f) {
-                    Debug.Log($"[ChunkGenerationSystem] Chunk at {EntityManager.GetComponentData<LocalTransform>(entity).Position} generated {vertices.Length} vertices and {indices.Length/3} triangles.");
-                }
             }
 
-            ecb.RemoveComponent<ChunkNeedsMeshingTag>(entity);
-            ecb.AddComponent<ChunkReadyTag>(entity);
+            ecb3.RemoveComponent<ChunkNeedsMeshingTag>(entity);
+            ecb3.AddComponent<ChunkReadyTag>(entity);
         }
+
+        ecb3.Playback(EntityManager);
+        ecb3.Dispose();
 
         // Apply structural changes outside the query loop
         foreach (var item in chunksToInitialize)
@@ -269,7 +282,7 @@ public partial class ChunkGenerationSystem : SystemBase
                 if (oldCollider.Value.IsCreated)
                 {
                     activeColliders.Remove(oldCollider.Value);
-                    oldCollider.Value.Dispose();
+                    collidersToDispose.Add(oldCollider.Value); // DEFERRED DISPOSAL
                 }
                 EntityManager.SetComponentData(item.entity, new PhysicsCollider { Value = item.collider });
             }
@@ -283,10 +296,9 @@ public partial class ChunkGenerationSystem : SystemBase
                 EntityManager.AddSharedComponent(item.entity, new PhysicsWorldIndex { Value = 0 });
             }
         }
-
-        ecb.Playback(EntityManager);
-        ecb.Dispose();
         
+        chunksToInitialize.Clear();
+
         vertices.Dispose();
         indices.Dispose();
         normals.Dispose();

@@ -265,7 +265,7 @@ MonoBehaviour:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 330585543}
-  m_Enabled: 1
+  m_Enabled: 0
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 618b0e3f6c65dd247a4a016150006c57, type: 3}
   m_Name: 
@@ -724,7 +724,8 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::SentisHeightmapGenerator
   RawFileName: world_map.raw
-  HeightScale: 250
+  HeightScale: 0.05
+  MapOffset: {x: 0, y: 0}
 --- !u!4 &2034946776
 Transform:
   m_ObjectHideFlags: 0

@@ -24,28 +24,14 @@ public partial struct PhysicsSafetySystem : ISystem
         if ((state.World.Flags & (WorldFlags.Conversion | WorldFlags.Shadow)) != 0)
             return;
 
-        int expectedChunks = 0;
-        int worldCount = 0;
-        foreach (var settings in SystemAPI.Query<RefRO<VoxelWorldSettings>>().WithNone<ChunkCoordinate>())
-        {
-            expectedChunks += settings.ValueRO.GridSize.x * settings.ValueRO.GridSize.y * settings.ValueRO.GridSize.z;
-            worldCount++;
-        }
-        foreach (var (settings, coord) in SystemAPI.Query<RefRO<VoxelWorldSettings>, RefRO<ChunkCoordinate>>())
-        {
-            if (coord.ValueRO.Value.x == -1)
-            {
-                expectedChunks += settings.ValueRO.GridSize.x * settings.ValueRO.GridSize.y * settings.ValueRO.GridSize.z;
-                worldCount++;
-            }
-        }
-
         int readyCount = _chunkQuery.CalculateEntityCount();
-        bool terrainReady = expectedChunks > 0 && readyCount >= expectedChunks;
+        // Dynamic loading means we'll never reach the full GridSize chunk count.
+        // Release physics once at least one vertical column (GridSize.y) has loaded.
+        bool terrainReady = readyCount >= 4;
 
         if (terrainReady && !_hasReleased)
         {
-            Debug.Log($"[PhysicsSafetySystem] All Terrains ({worldCount} worlds) are Ready ({readyCount}/{expectedChunks} chunks). Releasing physics objects.");
+            Debug.Log($"[PhysicsSafetySystem] Terrain started generating ({readyCount} chunks). Releasing physics objects.");
             _hasReleased = true;
         }
         else if (!terrainReady && _hasReleased)
