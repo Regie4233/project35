@@ -50,37 +50,88 @@ public partial class ChunkGenerationSystem : SystemBase
 
         var ecb = new EntityCommandBuffer(Allocator.Temp);
 
-        // 1. Spawning
-        foreach (var (settings, entity) in SystemAPI.Query<RefRW<VoxelWorldSettings>>().WithNone<ChunkCoordinate>().WithEntityAccess())
-        {
-            // Randomize the noise offset if not already explicitly set to something large, or just always randomize it so it's different each time.
-            settings.ValueRW.NoiseOffset = new float2(UnityEngine.Random.Range(-100000f, 100000f), UnityEngine.Random.Range(-100000f, 100000f));
-            
-            // Only spawn if we haven't already marked this authoring entity
-            Debug.Log($"[ChunkGenerationSystem] Spawning grid {settings.ValueRO.GridSize.x}x{settings.ValueRO.GridSize.z} on entity {entity} with NoiseOffset {settings.ValueRO.NoiseOffset}...");
-            
-            for (int x = 0; x < settings.ValueRO.GridSize.x; x++)
-            {
-                for (int y = 0; y < settings.ValueRO.GridSize.y; y++)
-                {
-                    for (int z = 0; z < settings.ValueRO.GridSize.z; z++)
-                    {
-                        var chunkEntity = ecb.Instantiate(entity);
-                        ecb.AddComponent(chunkEntity, new ChunkCoordinate { Value = new int3(x, y, z) });
-                        ecb.AddComponent<ChunkNeedsNoiseTag>(chunkEntity);
-                        
-                        float3 pos = new float3(x * settings.ValueRO.ChunkSize.x, y * settings.ValueRO.ChunkSize.y, z * settings.ValueRO.ChunkSize.z);
-                        ecb.AddComponent(chunkEntity, LocalTransform.FromPosition(pos));
-                        ecb.AddComponent<LocalToWorld>(chunkEntity);
+        // 1. Dynamic Chunk Loading / Spawning
+        float3 viewerPos = float3.zero;
+        if (Camera.main != null) viewerPos = Camera.main.transform.position;
 
-                        var buffer = ecb.AddBuffer<VoxelDataElement>(chunkEntity);
-                        int3 pSize = settings.ValueRO.ChunkSize + 5;
-                        buffer.ResizeUninitialized(pSize.x * pSize.y * pSize.z);
+        foreach (var (settings, authoringEntity) in SystemAPI.Query<RefRO<VoxelWorldSettings>>().WithNone<ChunkCoordinate>().WithEntityAccess())
+        {
+            int3 viewerCoord = new int3(
+                (int)math.floor(viewerPos.x / settings.ValueRO.ChunkSize.x),
+                0, 
+                (int)math.floor(viewerPos.z / settings.ValueRO.ChunkSize.z)
+            );
+
+            int renderDistance = settings.ValueRO.RenderDistance;
+            int chunksPerFrame = settings.ValueRO.ChunksPerFrame;
+
+            var loadedChunks = new NativeHashSet<int3>(1024, Allocator.Temp);
+            int chunksSpawnedThisFrame = 0;
+
+            // Despawn loop
+            foreach (var (chunkCoord, chunkEntity) in SystemAPI.Query<RefRO<ChunkCoordinate>>().WithEntityAccess())
+            {
+                // We don't despawn the authoring entity because it has no ChunkCoordinate. 
+                // Any entity with ChunkCoordinate is an active chunk.
+                
+                if (math.abs(chunkCoord.ValueRO.Value.x - viewerCoord.x) > renderDistance || 
+                    math.abs(chunkCoord.ValueRO.Value.z - viewerCoord.z) > renderDistance)
+                {
+                    if (EntityManager.HasComponent<PhysicsCollider>(chunkEntity))
+                    {
+                        var collider = EntityManager.GetComponentData<PhysicsCollider>(chunkEntity);
+                        if (collider.Value.IsCreated)
+                        {
+                            activeColliders.Remove(collider.Value);
+                            collider.Value.Dispose();
+                        }
+                    }
+                    
+                    if (EntityManager.HasComponent<ChunkManagedData>(chunkEntity))
+                    {
+                        var managedData = EntityManager.GetComponentObject<ChunkManagedData>(chunkEntity);
+                        if (managedData.Mesh != null) UnityEngine.Object.Destroy(managedData.Mesh);
+                    }
+
+                    ecb.DestroyEntity(chunkEntity);
+                }
+                else
+                {
+                    loadedChunks.Add(chunkCoord.ValueRO.Value);
+                }
+            }
+
+            // Spawn missing chunks within render distance
+            for (int x = -renderDistance; x <= renderDistance; x++)
+            {
+                for (int z = -renderDistance; z <= renderDistance; z++)
+                {
+                    for (int y = 0; y < settings.ValueRO.GridSize.y; y++)
+                    {
+                        int3 targetCoord = new int3(viewerCoord.x + x, y, viewerCoord.z + z);
+
+                        if (!loadedChunks.Contains(targetCoord) && chunksSpawnedThisFrame < chunksPerFrame)
+                        {
+                            var chunkEntity = ecb.Instantiate(authoringEntity);
+                            ecb.AddComponent(chunkEntity, new ChunkCoordinate { Value = targetCoord });
+                            ecb.AddComponent<ChunkNeedsNoiseTag>(chunkEntity);
+                            
+                            float3 pos = new float3(targetCoord.x * settings.ValueRO.ChunkSize.x, targetCoord.y * settings.ValueRO.ChunkSize.y, targetCoord.z * settings.ValueRO.ChunkSize.z);
+                            ecb.AddComponent(chunkEntity, LocalTransform.FromPosition(pos));
+                            ecb.AddComponent<LocalToWorld>(chunkEntity);
+
+                            var buffer = ecb.AddBuffer<VoxelDataElement>(chunkEntity);
+                            int3 pSize = settings.ValueRO.ChunkSize + 5;
+                            buffer.ResizeUninitialized(pSize.x * pSize.y * pSize.z);
+
+                            chunksSpawnedThisFrame++;
+                            loadedChunks.Add(targetCoord);
+                        }
                     }
                 }
             }
-            // Mark the authoring entity so it doesn't trigger spawning again
-            ecb.AddComponent(entity, new ChunkCoordinate { Value = new int3(-1) });
+            
+            loadedChunks.Dispose();
         }
 
         // 2. Noise Generation
@@ -201,6 +252,16 @@ public partial class ChunkGenerationSystem : SystemBase
         foreach (var item in chunksToInitialize)
         {
             ChunkRendererSetup.InitializeChunkRendering(EntityManager, item.entity, item.mesh, item.mat);
+            
+            if (!EntityManager.HasComponent<ChunkManagedData>(item.entity))
+            {
+                EntityManager.AddComponentObject(item.entity, new ChunkManagedData { Mesh = item.mesh });
+            }
+            else
+            {
+                var managed = EntityManager.GetComponentObject<ChunkManagedData>(item.entity);
+                managed.Mesh = item.mesh;
+            }
             
             if (EntityManager.HasComponent<PhysicsCollider>(item.entity))
             {

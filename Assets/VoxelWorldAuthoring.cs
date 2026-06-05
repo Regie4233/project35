@@ -11,6 +11,9 @@ public struct VoxelWorldSettings : IComponentData
     public float IsoLevel;
     public float2 NoiseOffset;
     
+    public int RenderDistance;
+    public int ChunksPerFrame;
+    
     public float ContinentScale;
     public float WarpScale;
     public float WarpIntensity;
@@ -43,7 +46,13 @@ public class VoxelWorldAuthoring : MonoBehaviour
 {
    
     public Vector3Int ChunkSize = new Vector3Int(16, 16, 16);
-    public Vector3Int GridSize = new Vector3Int(5, 4, 5); // Increased Y to 4 to allow 64 units of height
+    public Vector3Int GridSize = new Vector3Int(5, 4, 5); // Used for Y-height bounding, X/Z are dynamic
+    
+    [Header("Dynamic Chunk Loading")]
+    [Tooltip("Radius of chunks to load around the player")]
+    public int RenderDistance = 8;
+    [Tooltip("Max chunks to spawn per frame to prevent lag")]
+    public int ChunksPerFrame = 4;
     
     [Header("Base Settings")]
     public float NoiseScale = 0.05f;
@@ -89,6 +98,8 @@ public class VoxelWorldAuthoring : MonoBehaviour
                 GridSize = new int3(authoring.GridSize.x, authoring.GridSize.y, authoring.GridSize.z),
                 NoiseScale = authoring.NoiseScale,
                 IsoLevel = authoring.IsoLevel,
+                RenderDistance = authoring.RenderDistance,
+                ChunksPerFrame = authoring.ChunksPerFrame,
                 ContinentScale = authoring.ContinentScale,
                 WarpScale = authoring.WarpScale,
                 WarpIntensity = authoring.WarpIntensity,
