@@ -101,6 +101,25 @@ public partial class ChunkGenerationSystem : SystemBase
                         if (managedData.Mesh != null) UnityEngine.Object.Destroy(managedData.Mesh);
                     }
 
+                    if (EntityManager.HasComponent<ChunkNoiseJobInfo>(chunkEntity))
+                    {
+                        var info = EntityManager.GetComponentData<ChunkNoiseJobInfo>(chunkEntity);
+                        info.Handle.Complete();
+                        if (info.VoxelData.IsCreated) info.VoxelData.Dispose();
+                    }
+
+                    if (EntityManager.HasComponent<ChunkMeshingJobInfo>(chunkEntity))
+                    {
+                        var info = EntityManager.GetComponentData<ChunkMeshingJobInfo>(chunkEntity);
+                        info.Handle.Complete();
+                        if (info.VoxelDataCopy.IsCreated) info.VoxelDataCopy.Dispose();
+                        if (info.Vertices.IsCreated) info.Vertices.Dispose();
+                        if (info.Indices.IsCreated) info.Indices.Dispose();
+                        if (info.Normals.IsCreated) info.Normals.Dispose();
+                        if (info.UVs.IsCreated) info.UVs.Dispose();
+                        if (info.Colors.IsCreated) info.Colors.Dispose();
+                    }
+
                     ecb1.DestroyEntity(chunkEntity);
                 }
                 else
@@ -146,9 +165,12 @@ public partial class ChunkGenerationSystem : SystemBase
 
         var ecb2 = new EntityCommandBuffer(Allocator.Temp);
 
-        // 2. Noise Generation
-        foreach (var (settings, coord, voxelBuffer, entity) in SystemAPI.Query<RefRO<VoxelWorldSettings>, RefRO<ChunkCoordinate>, DynamicBuffer<VoxelDataElement>>().WithAll<ChunkNeedsNoiseTag>().WithEntityAccess())
+        // 2a. Start Noise Generation
+        foreach (var (settings, coord, entity) in SystemAPI.Query<RefRO<VoxelWorldSettings>, RefRO<ChunkCoordinate>>().WithAll<ChunkNeedsNoiseTag>().WithEntityAccess())
         {
+            int3 pSize = settings.ValueRO.ChunkSize + 5;
+            var tempVoxelData = new NativeArray<VoxelDataElement>(pSize.x * pSize.y * pSize.z, Allocator.TempJob);
+
             var noiseJob = new NoiseGenerationJob
             {
                 ChunkSize = settings.ValueRO.ChunkSize,
@@ -163,14 +185,29 @@ public partial class ChunkGenerationSystem : SystemBase
                 HeightmapResolution = heightmapData.Resolution,
                 HeightScale = heightmapData.HeightScale,
                 MapOffset = heightmapData.MapOffset,
-                VoxelData = voxelBuffer.AsNativeArray()
+                VoxelData = tempVoxelData
             };
 
-            int3 pSize = settings.ValueRO.ChunkSize + 5;
-            noiseJob.Schedule(pSize.x * pSize.y * pSize.z, 64).Complete();
+            var handle = noiseJob.Schedule(pSize.x * pSize.y * pSize.z, 64);
 
+            ecb2.AddComponent(entity, new ChunkNoiseJobInfo { Handle = handle, VoxelData = tempVoxelData });
             ecb2.RemoveComponent<ChunkNeedsNoiseTag>(entity);
-            ecb2.AddComponent<ChunkNeedsMeshingTag>(entity);
+            ecb2.AddComponent<ChunkNoiseJobActiveTag>(entity);
+        }
+
+        // 2b. Complete Noise Generation
+        foreach (var (info, voxelBuffer, entity) in SystemAPI.Query<RefRO<ChunkNoiseJobInfo>, DynamicBuffer<VoxelDataElement>>().WithAll<ChunkNoiseJobActiveTag>().WithEntityAccess())
+        {
+            if (info.ValueRO.Handle.IsCompleted)
+            {
+                info.ValueRO.Handle.Complete();
+                voxelBuffer.CopyFrom(info.ValueRO.VoxelData);
+                info.ValueRO.VoxelData.Dispose();
+
+                ecb2.RemoveComponent<ChunkNoiseJobInfo>(entity);
+                ecb2.RemoveComponent<ChunkNoiseJobActiveTag>(entity);
+                ecb2.AddComponent<ChunkNeedsMeshingTag>(entity);
+            }
         }
         
         ecb2.Playback(EntityManager);
@@ -178,24 +215,21 @@ public partial class ChunkGenerationSystem : SystemBase
 
         var ecb3 = new EntityCommandBuffer(Allocator.Temp);
 
-        // 3. Meshing
-        var vertices = new NativeList<float3>(Allocator.Temp);
-        var indices = new NativeList<ushort>(Allocator.Temp);
-        var normals = new NativeList<float3>(Allocator.Temp);
-        var uvs = new NativeList<float2>(Allocator.Temp);
-        var colors = new NativeList<float4>(Allocator.Temp);
-
+        // 3a. Start Meshing Jobs
         foreach (var (settings, coord, voxelBuffer, entity) in SystemAPI.Query<RefRO<VoxelWorldSettings>, RefRO<ChunkCoordinate>, DynamicBuffer<VoxelDataElement>>().WithAll<ChunkNeedsMeshingTag>().WithEntityAccess())
         {
-            vertices.Clear();
-            indices.Clear();
-            normals.Clear();
-            uvs.Clear();
-            colors.Clear();
+            var vertices = new NativeList<float3>(Allocator.TempJob);
+            var indices = new NativeList<ushort>(Allocator.TempJob);
+            var normals = new NativeList<float3>(Allocator.TempJob);
+            var uvs = new NativeList<float2>(Allocator.TempJob);
+            var colors = new NativeList<float4>(Allocator.TempJob);
+
+            var voxelDataCopy = new NativeArray<VoxelDataElement>(voxelBuffer.Length, Allocator.TempJob);
+            voxelDataCopy.CopyFrom(voxelBuffer.AsNativeArray());
 
             var meshingJob = new MarchingCubesJob
             {
-                VoxelData = voxelBuffer.AsNativeArray(),
+                VoxelData = voxelDataCopy,
                 ChunkSize = settings.ValueRO.ChunkSize,
                 ChunkWorldPosition = new float3(coord.ValueRO.Value.x * settings.ValueRO.ChunkSize.x, coord.ValueRO.Value.y * settings.ValueRO.ChunkSize.y, coord.ValueRO.Value.z * settings.ValueRO.ChunkSize.z),
                 IsoLevel = settings.ValueRO.IsoLevel,
@@ -210,52 +244,83 @@ public partial class ChunkGenerationSystem : SystemBase
                 TriTable = triTable
             };
 
-            meshingJob.Execute();
+            var handle = meshingJob.Schedule();
 
-            if (vertices.Length > 0)
-            {
-                var mesh = new Mesh();
-                mesh.SetVertices(vertices.AsArray());
-                mesh.SetIndices(indices.AsArray(), MeshTopology.Triangles, 0);
-                mesh.SetNormals(normals.AsArray());
-                mesh.SetUVs(0, uvs.AsArray());
-                mesh.SetColors(colors.AsArray());
-                mesh.RecalculateBounds();
-
-                var materialComp = EntityManager.GetComponentObject<VoxelMaterialComponent>(entity);
-                UnityEngine.Material mat = materialComp.Material;
-                if (mat == null)
-                {
-                    if (fallbackMaterial == null)
-                    {
-                        Shader shader = Shader.Find("Custom/VoxelVertexColor");
-                        if (shader == null) shader = Shader.Find("Universal Render Pipeline/Lit");
-                        if (shader != null) fallbackMaterial = new UnityEngine.Material(shader);
-                    }
-                    mat = fallbackMaterial;
-                }
-
-                int numTriangles = indices.Length / 3;
-                var triangleIndices = new NativeArray<int3>(numTriangles, Allocator.Temp);
-                for (int t = 0; t < indices.Length; t += 3) 
-                {
-                    triangleIndices[t / 3] = new int3(indices[t], indices[t + 1], indices[t + 2]);
-                }
-                
-                var meshCollider = Unity.Physics.MeshCollider.Create(
-                    vertices.AsArray(), 
-                    triangleIndices, 
-                    CollisionFilter.Default, 
-                    Unity.Physics.Material.Default
-                );
-                triangleIndices.Dispose();
-
-                activeColliders.Add(meshCollider);
-                chunksToInitialize.Add((entity, mesh, mat, meshCollider));
-            }
-
+            ecb3.AddComponent(entity, new ChunkMeshingJobInfo 
+            { 
+                Handle = handle,
+                VoxelDataCopy = voxelDataCopy,
+                Vertices = vertices,
+                Indices = indices,
+                Normals = normals,
+                UVs = uvs,
+                Colors = colors
+            });
+            
             ecb3.RemoveComponent<ChunkNeedsMeshingTag>(entity);
-            ecb3.AddComponent<ChunkReadyTag>(entity);
+            ecb3.AddComponent<ChunkMeshingJobActiveTag>(entity);
+        }
+
+        // 3b. Complete Meshing Jobs
+        foreach (var (info, entity) in SystemAPI.Query<RefRO<ChunkMeshingJobInfo>>().WithAll<ChunkMeshingJobActiveTag>().WithEntityAccess())
+        {
+            if (info.ValueRO.Handle.IsCompleted)
+            {
+                info.ValueRO.Handle.Complete();
+
+                if (info.ValueRO.Vertices.Length > 0)
+                {
+                    var mesh = new Mesh();
+                    mesh.SetVertices(info.ValueRO.Vertices.AsArray());
+                    mesh.SetIndices(info.ValueRO.Indices.AsArray(), MeshTopology.Triangles, 0);
+                    mesh.SetNormals(info.ValueRO.Normals.AsArray());
+                    mesh.SetUVs(0, info.ValueRO.UVs.AsArray());
+                    mesh.SetColors(info.ValueRO.Colors.AsArray());
+                    mesh.RecalculateBounds();
+
+                    var materialComp = EntityManager.GetComponentObject<VoxelMaterialComponent>(entity);
+                    UnityEngine.Material mat = materialComp.Material;
+                    if (mat == null)
+                    {
+                        if (fallbackMaterial == null)
+                        {
+                            Shader shader = Shader.Find("Custom/VoxelVertexColor");
+                            if (shader == null) shader = Shader.Find("Universal Render Pipeline/Lit");
+                            if (shader != null) fallbackMaterial = new UnityEngine.Material(shader);
+                        }
+                        mat = fallbackMaterial;
+                    }
+
+                    int numTriangles = info.ValueRO.Indices.Length / 3;
+                    var triangleIndices = new NativeArray<int3>(numTriangles, Allocator.Temp);
+                    for (int t = 0; t < info.ValueRO.Indices.Length; t += 3) 
+                    {
+                        triangleIndices[t / 3] = new int3(info.ValueRO.Indices[t], info.ValueRO.Indices[t + 1], info.ValueRO.Indices[t + 2]);
+                    }
+                    
+                    var meshCollider = Unity.Physics.MeshCollider.Create(
+                        info.ValueRO.Vertices.AsArray(), 
+                        triangleIndices, 
+                        CollisionFilter.Default, 
+                        Unity.Physics.Material.Default
+                    );
+                    triangleIndices.Dispose();
+
+                    activeColliders.Add(meshCollider);
+                    chunksToInitialize.Add((entity, mesh, mat, meshCollider));
+                }
+
+                info.ValueRO.VoxelDataCopy.Dispose();
+                info.ValueRO.Vertices.Dispose();
+                info.ValueRO.Indices.Dispose();
+                info.ValueRO.Normals.Dispose();
+                info.ValueRO.UVs.Dispose();
+                info.ValueRO.Colors.Dispose();
+
+                ecb3.RemoveComponent<ChunkMeshingJobInfo>(entity);
+                ecb3.RemoveComponent<ChunkMeshingJobActiveTag>(entity);
+                ecb3.AddComponent<ChunkReadyTag>(entity);
+            }
         }
 
         ecb3.Playback(EntityManager);
@@ -298,12 +363,6 @@ public partial class ChunkGenerationSystem : SystemBase
         }
         
         chunksToInitialize.Clear();
-
-        vertices.Dispose();
-        indices.Dispose();
-        normals.Dispose();
-        uvs.Dispose();
-        colors.Dispose();
     }
 }
 

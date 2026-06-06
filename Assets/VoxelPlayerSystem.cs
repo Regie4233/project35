@@ -10,6 +10,14 @@ public partial class VoxelPlayerSystem : SystemBase
 {
     private Vector2 pitchYaw;
     private bool isInitialized = false;
+    private bool initialMapSpawned = false;
+    private EntityQuery readyChunkQuery;
+
+    protected override void OnCreate()
+    {
+        RequireForUpdate<VoxelPlayer>();
+        readyChunkQuery = SystemAPI.QueryBuilder().WithAll<ChunkReadyTag>().Build();
+    }
 
     protected override void OnUpdate()
     {
@@ -39,13 +47,41 @@ public partial class VoxelPlayerSystem : SystemBase
             Camera.main.transform.rotation = Quaternion.Euler(pitchYaw.x, pitchYaw.y, 0);
         }
 
-        float2 moveInput = Vector2.zero;
-        if (Keyboard.current.wKey.isPressed) moveInput.y += 1;
-        if (Keyboard.current.sKey.isPressed) moveInput.y -= 1;
-        if (Keyboard.current.aKey.isPressed) moveInput.x -= 1;
-        if (Keyboard.current.dKey.isPressed) moveInput.x += 1;
+        if (!initialMapSpawned)
+        {
+            bool foundSettings = false;
+            VoxelWorldSettings settings = default;
+            foreach (var s in SystemAPI.Query<RefRO<VoxelWorldSettings>>().WithNone<ChunkCoordinate>())
+            {
+                settings = s.ValueRO;
+                foundSettings = true;
+                break;
+            }
 
-        bool jumpPressed = Keyboard.current.spaceKey.wasPressedThisFrame;
+            if (foundSettings)
+            {
+                int expectedChunks = (2 * settings.RenderDistance + 1) * (2 * settings.RenderDistance + 1) * settings.GridSize.y;
+                int readyChunks = readyChunkQuery.CalculateEntityCount();
+
+                if (readyChunks >= expectedChunks)
+                {
+                    initialMapSpawned = true;
+                }
+            }
+        }
+
+        float2 moveInput = Vector2.zero;
+        bool jumpPressed = false;
+
+        if (initialMapSpawned)
+        {
+            if (Keyboard.current.wKey.isPressed) moveInput.y += 1;
+            if (Keyboard.current.sKey.isPressed) moveInput.y -= 1;
+            if (Keyboard.current.aKey.isPressed) moveInput.x -= 1;
+            if (Keyboard.current.dKey.isPressed) moveInput.x += 1;
+
+            jumpPressed = Keyboard.current.spaceKey.wasPressedThisFrame;
+        }
 
         float3 camForward = Camera.main.transform.forward;
         camForward.y = 0;
@@ -57,17 +93,25 @@ public partial class VoxelPlayerSystem : SystemBase
 
         foreach (var (player, velocity, transform) in SystemAPI.Query<RefRO<VoxelPlayer>, RefRW<PhysicsVelocity>, RefRW<LocalTransform>>())
         {
-            float3 moveDir = camForward * moveInput.y + camRight * moveInput.x;
-            if (math.lengthsq(moveDir) > 0) moveDir = math.normalize(moveDir);
-
-            // Apply X/Z velocity while keeping Y (gravity)
-            velocity.ValueRW.Linear.x = moveDir.x * player.ValueRO.Speed;
-            velocity.ValueRW.Linear.z = moveDir.z * player.ValueRO.Speed;
-
-            // Simple jump check
-            if (jumpPressed && math.abs(velocity.ValueRO.Linear.y) < 0.2f)
+            if (!initialMapSpawned)
             {
-                velocity.ValueRW.Linear.y = player.ValueRO.JumpForce;
+                velocity.ValueRW.Linear = float3.zero;
+                velocity.ValueRW.Angular = float3.zero;
+            }
+            else
+            {
+                float3 moveDir = camForward * moveInput.y + camRight * moveInput.x;
+                if (math.lengthsq(moveDir) > 0) moveDir = math.normalize(moveDir);
+
+                // Apply X/Z velocity while keeping Y (gravity)
+                velocity.ValueRW.Linear.x = moveDir.x * player.ValueRO.Speed;
+                velocity.ValueRW.Linear.z = moveDir.z * player.ValueRO.Speed;
+
+                // Simple jump check
+                if (jumpPressed && math.abs(velocity.ValueRO.Linear.y) < 0.2f)
+                {
+                    velocity.ValueRW.Linear.y = player.ValueRO.JumpForce;
+                }
             }
 
             // Sync Camera position to player's head
