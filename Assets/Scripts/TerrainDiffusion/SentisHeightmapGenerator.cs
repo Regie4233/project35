@@ -31,6 +31,11 @@ public class SentisHeightmapGenerator : MonoBehaviour
 
     void Start()
     {
+        // Force the map to be centered on the origin so the player spawns on the island
+        if (MapOffset == Vector2.zero)
+        {
+            MapOffset = new Vector2(0.5f, 0.5f);
+        }
         StartCoroutine(LoadTerrainRoutine());
     }
 
@@ -67,12 +72,24 @@ public class SentisHeightmapGenerator : MonoBehaviour
                 if (elevation > maxElev) maxElev = elevation;
             }
             
-            Debug.Log($"[StaticHeightmapLoader] Raw elevation ranges from {minElev}m to {maxElev}m. Using absolute elevation values...");
+            Debug.Log($"[StaticHeightmapLoader] Raw elevation ranges from {minElev}m to {maxElev}m. Normalizing to fit voxel world...");
 
-            // We load the flat float array directly
+            // We load and normalize the flat float array so it perfectly fits between bedrock (y=2) and sky (y=60)
             for (int i = 0; i < generatedHeightmap.Length; i++)
             {
                 float elevation = System.BitConverter.ToSingle(fileData, i * 4);
+                
+                if (elevation < 0 && minElev < 0)
+                {
+                    // Map deep ocean down to -23 blocks (so SeaLevel 25 - 23 = 2, which is MaxBedrockDepth)
+                    elevation = (elevation / math.abs(minElev)) * 23.0f;
+                }
+                else if (elevation >= 0 && maxElev > 0)
+                {
+                    // Map highest mountains to +35 blocks (so SeaLevel 25 + 35 = 60, which is MaxSkyHeight)
+                    elevation = (elevation / maxElev) * 35.0f;
+                }
+                
                 generatedHeightmap[i] = elevation;
             }
             Debug.Log($"[StaticHeightmapLoader] Loaded {calculatedResolution}x{calculatedResolution} map successfully.");
@@ -113,7 +130,7 @@ public class SentisHeightmapGenerator : MonoBehaviour
         {
             Heightmap = generatedHeightmap,
             Resolution = resolution,
-            HeightScale = HeightScale,
+            HeightScale = 1.0f, // Force to 1.0f since we pre-normalized the heights
             MapOffset = MapOffset,
             IsReady = true
         });

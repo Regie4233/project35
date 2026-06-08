@@ -71,12 +71,12 @@ public struct NoiseGenerationJob : IJobParallelFor
         // 3. Convert absolute heightmap value (meters) to world height (This is the AI Continent Terrain)
         float continentTerrainHeight = SeaLevel + (heightmapValue * HeightScale);
         
-        // Fix for flat plains: Add procedural rolling hills ONLY to the low areas of the land (0m to 500m)
+        // Fix for flat plains: Add procedural rolling hills ONLY to the low areas of the land (0m to 10m in voxel height)
         // This calculates a wide, 20-block tall hill pattern
         float plainHills = noise.snoise(new float2(worldPos.x * 0.005f, worldPos.z * 0.005f)) * 20.0f;
         
-        // Calculate a blend factor: 1.0 at sea level (0m), 0.0 in mountains (> 500m) and 0.0 in oceans (< 0m)
-        float plainBlend = math.clamp(1.0f - (math.abs(heightmapValue) / 500f), 0f, 1f); 
+        // Calculate a blend factor: 1.0 at sea level (0m), 0.0 in mountains (> 10m) and 0.0 in deep oceans (< -10m)
+        float plainBlend = math.clamp(1.0f - (math.abs(heightmapValue) / 10f), 0f, 1f); 
         
         // Add the hills to the plains
         continentTerrainHeight += (plainHills * plainBlend);

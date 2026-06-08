@@ -100,17 +100,30 @@ public partial class VoxelPlayerSystem : SystemBase
             }
             else
             {
-                float3 moveDir = camForward * moveInput.y + camRight * moveInput.x;
-                if (math.lengthsq(moveDir) > 0) moveDir = math.normalize(moveDir);
+                bool isFlying = Keyboard.current.tKey.isPressed;
+                float currentSpeed = isFlying ? player.ValueRO.Speed * 10f : player.ValueRO.Speed;
 
-                // Apply X/Z velocity while keeping Y (gravity)
-                velocity.ValueRW.Linear.x = moveDir.x * player.ValueRO.Speed;
-                velocity.ValueRW.Linear.z = moveDir.z * player.ValueRO.Speed;
-
-                // Simple jump check
-                if (jumpPressed && math.abs(velocity.ValueRO.Linear.y) < 0.2f)
+                if (isFlying)
                 {
-                    velocity.ValueRW.Linear.y = player.ValueRO.JumpForce;
+                    float3 flyDir = Camera.main.transform.forward * moveInput.y + Camera.main.transform.right * moveInput.x;
+                    if (math.lengthsq(flyDir) > 0) flyDir = math.normalize(flyDir);
+                    
+                    velocity.ValueRW.Linear = flyDir * currentSpeed;
+                }
+                else
+                {
+                    float3 moveDir = camForward * moveInput.y + camRight * moveInput.x;
+                    if (math.lengthsq(moveDir) > 0) moveDir = math.normalize(moveDir);
+
+                    // Apply X/Z velocity while keeping Y (gravity)
+                    velocity.ValueRW.Linear.x = moveDir.x * currentSpeed;
+                    velocity.ValueRW.Linear.z = moveDir.z * currentSpeed;
+
+                    // Simple jump check
+                    if (jumpPressed && math.abs(velocity.ValueRO.Linear.y) < 0.2f)
+                    {
+                        velocity.ValueRW.Linear.y = player.ValueRO.JumpForce;
+                    }
                 }
             }
 

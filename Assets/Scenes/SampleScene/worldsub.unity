@@ -393,8 +393,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::VoxelWorldAuthoring
   ChunkSize: {x: 16, y: 16, z: 16}
   GridSize: {x: 12, y: 32, z: 12}
-  RenderDistance: 8
-  ChunksPerFrame: 4
+  RenderDistance: 32
+  ChunksPerFrame: 32
   NoiseScale: 0.00048
   IsoLevel: 0.5001
   ContinentScale: 0.002
