@@ -180,7 +180,7 @@ public partial class ChunkGenerationSystem : SystemBase
                 MaxSkyHeight = settings.ValueRO.MaxSkyHeight,
                 MaxBedrockDepth = settings.ValueRO.MaxBedrockDepth,
                 SeaLevel = settings.ValueRO.SeaLevel,
-                ContinentScale = settings.ValueRO.ContinentScale,
+                MountainScale = settings.ValueRO.MountainScale,
                 Heightmap = heightmapData.Heightmap,
                 HeightmapResolution = heightmapData.Resolution,
                 HeightScale = heightmapData.HeightScale,

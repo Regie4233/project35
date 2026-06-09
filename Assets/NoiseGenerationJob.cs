@@ -20,7 +20,7 @@ public struct NoiseGenerationJob : IJobParallelFor
     public float MaxSkyHeight;
     public float MaxBedrockDepth;
     public float SeaLevel;
-    public float ContinentScale;
+    public float MountainScale;
 
     public NativeArray<VoxelDataElement> VoxelData;
 
@@ -69,38 +69,17 @@ public struct NoiseGenerationJob : IJobParallelFor
         float heightmapValue = math.lerp(h0, h1, ty);
 
         // 3. Convert absolute heightmap value (meters) to world height (This is the AI Continent Terrain)
-        float continentTerrainHeight = SeaLevel + (heightmapValue * HeightScale);
+        float scaledHeight = heightmapValue * HeightScale;
         
-        // Fix for flat plains: Add procedural rolling hills ONLY to the low areas of the land (0m to 10m in voxel height)
-        // This calculates a wide, 20-block tall hill pattern
-        float plainHills = noise.snoise(new float2(worldPos.x * 0.005f, worldPos.z * 0.005f)) * 20.0f;
-        
-        // Calculate a blend factor: 1.0 at sea level (0m), 0.0 in mountains (> 10m) and 0.0 in deep oceans (< -10m)
-        float plainBlend = math.clamp(1.0f - (math.abs(heightmapValue) / 10f), 0f, 1f); 
-        
-        // Add the hills to the plains
-        continentTerrainHeight += (plainHills * plainBlend);
+        if (scaledHeight > 0) 
+        {
+            scaledHeight *= MountainScale;
+        }
+
+        float continentTerrainHeight = SeaLevel + scaledHeight;
         
         // We now use the raw AI terrain height for both land and ocean, so the ocean floor has natural depth and trenches
         float targetTerrainHeight = continentTerrainHeight;
-
-        // Add procedural high-frequency detail noise (Fractional Brownian Motion - fBm)
-        // This layers multiple octaves of noise for a natural, fractal-like rocky/bumpy texture
-        float amplitude = 1.0f;
-        float frequency = 0.015f; // Base frequency for rolling hills
-        float detailNoise = 0f;
-        
-        for (int i = 0; i < 4; i++) // 4 Octaves
-        {
-            detailNoise += noise.snoise(new float2(worldPos.x * frequency, worldPos.z * frequency)) * amplitude;
-            
-            amplitude *= 0.4f; // Persistence: how much smaller the next bumps are
-            frequency *= 2.0f; // Lacunarity: how much more frequent the next bumps are
-        }
-        
-        // Apply a global scale to the noise (e.g. 5 blocks tall overall)
-        // We also lower the terrain slightly based on the noise to create erosion-like valleys
-        targetTerrainHeight += (detailNoise * 5.0f);
 
         // 4. Calculate Density for Marching Cubes
         // Positive density = solid, Negative = air

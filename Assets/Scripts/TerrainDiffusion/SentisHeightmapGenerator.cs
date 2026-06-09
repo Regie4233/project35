@@ -92,7 +92,34 @@ public class SentisHeightmapGenerator : MonoBehaviour
                 
                 generatedHeightmap[i] = elevation;
             }
-            Debug.Log($"[StaticHeightmapLoader] Loaded {calculatedResolution}x{calculatedResolution} map successfully.");
+            // Apply a multi-pass smoothing blur to the heightmap!
+            // Because the AI map has slight microscopic pixel noise, multiplying the height by 10 (MountainScale)
+            // turns that tiny noise into massive 30-block tall jagged stalagmites. Blurring it fixes this perfectly.
+            int blurPasses = 3; 
+            NativeArray<float> tempBuffer = new NativeArray<float>(generatedHeightmap.Length, Allocator.TempJob);
+            
+            for (int pass = 0; pass < blurPasses; pass++)
+            {
+                generatedHeightmap.CopyTo(tempBuffer);
+                for (int y = 1; y < calculatedResolution - 1; y++)
+                {
+                    for (int x = 1; x < calculatedResolution - 1; x++)
+                    {
+                        float sum = 0;
+                        for (int dy = -1; dy <= 1; dy++)
+                        {
+                            for (int dx = -1; dx <= 1; dx++)
+                            {
+                                sum += tempBuffer[(y + dy) * calculatedResolution + (x + dx)];
+                            }
+                        }
+                        generatedHeightmap[y * calculatedResolution + x] = sum / 9.0f;
+                    }
+                }
+            }
+            tempBuffer.Dispose();
+
+            Debug.Log($"[StaticHeightmapLoader] Loaded and smoothed {calculatedResolution}x{calculatedResolution} map successfully.");
         }
         else
         {

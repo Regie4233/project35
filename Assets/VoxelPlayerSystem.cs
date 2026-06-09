@@ -11,6 +11,8 @@ public partial class VoxelPlayerSystem : SystemBase
     private Vector2 pitchYaw;
     private bool isInitialized = false;
     private bool initialMapSpawned = false;
+    private bool needsSpawnTeleport = false;
+    private float spawnHeight = 100f;
     private EntityQuery readyChunkQuery;
 
     protected override void OnCreate()
@@ -60,10 +62,19 @@ public partial class VoxelPlayerSystem : SystemBase
 
             if (foundSettings)
             {
+                // Teleport to the sky on the very first frame so the user can watch the terrain generate!
+                if (!needsSpawnTeleport && spawnHeight == 100f) // Use 100f as a default uninitialized check
+                {
+                    needsSpawnTeleport = true;
+                    spawnHeight = settings.MaxSkyHeight + 5f;
+                }
+
                 int expectedChunks = (2 * settings.RenderDistance + 1) * (2 * settings.RenderDistance + 1) * settings.GridSize.y;
                 int readyChunks = readyChunkQuery.CalculateEntityCount();
 
-                if (readyChunks >= expectedChunks)
+                // Because a 64-height grid with 16 render distance is ~70,000 chunks, waiting for ALL of them takes 30+ seconds.
+                // We'll unlock the player's movement as soon as a decent radius is spawned (e.g. 2000 chunks, which takes ~1 second).
+                if (readyChunks >= math.min(expectedChunks, 2000))
                 {
                     initialMapSpawned = true;
                 }
@@ -100,6 +111,12 @@ public partial class VoxelPlayerSystem : SystemBase
             }
             else
             {
+                if (needsSpawnTeleport)
+                {
+                    transform.ValueRW.Position.y = spawnHeight;
+                    needsSpawnTeleport = false;
+                }
+
                 bool isFlying = Keyboard.current.tKey.isPressed;
                 float currentSpeed = isFlying ? player.ValueRO.Speed * 10f : player.ValueRO.Speed;
 
